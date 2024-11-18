@@ -4,6 +4,7 @@ import platform
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
+from tkinter import filedialog
 from PIL import Image, ImageTk
 
 
@@ -76,6 +77,12 @@ class App:
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
 
+        self.dialog_filetypes = (
+            ('Image Files', ' '.join([f'*.{ext}' for ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS])),
+        )
+
+        self.current_image_file_path = None
+
     def init_app(self):
         self.set_min_width_height()
         self.apply_platform_styles()
@@ -128,6 +135,12 @@ class App:
             self.root_style.theme_use('default')
             self.root_style.configure('TButton', foreground='black', font=('TkDefaultFont', 12))
             self.root_style.configure('TLabel', foreground='black', font=('TkDefaultFont', 14))
+
+    @staticmethod
+    def get_photo_from_image_path(image_file_path):
+        image_file_abs_path = os.path.abspath(image_file_path)
+        image = Image.open(image_file_abs_path)
+        return ImageTk.PhotoImage(image)
 
     def create_page_home(self):
         frame = tk.Frame(master=self.container)
@@ -184,8 +197,27 @@ class App:
         frame = tk.Frame(self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
-        button = ttk.Button(frame, text="Go to Directories & Files View", command=lambda: self.show_page("dirs_files"))
-        button.pack()
+        if self.current_image_file_path is None:
+            print('No image')
+        else:
+            pass
+            # current_photo = self.get_photo_from_image_path(self.current_image_file_path);
+            # current_canvas = tk.Canvas(master=center_frame, width=image_size, height=image_size)
+            # current_canvas.pack(fill=tk.BOTH, expand=True)
+            #
+            # canvas_width = current_canvas.winfo_width()
+            # canvas_height = current_canvas.winfo_height()
+            # canvas_width = image_size if canvas_width < image_size else canvas_width
+            # canvas_height = image_size if canvas_height < image_size else canvas_height
+            #
+            # current_canvas.create_image(canvas_width // 2, canvas_height // 2, anchor=tk.CENTER, image=current_photo)
+            # current_canvas.image = current_photo
+            #
+            # self.canvases['empty_folder'] = current_canvas
+            # self.images['empty_folder'] = empty_folder_image
+            # self.photos['empty_folder'] = current_photo
+            #
+            # self.resize_home_page_items()
 
         self.pages['img'] = frame
         self.frames['img'] = frame
@@ -266,7 +298,15 @@ class App:
         self.resize_home_page_items()
 
     def on_home_page_click(self, event):
-        print('clicked')
+        selected_image_file = filedialog.askopenfilename(
+            title='Select image file(s)/directory',
+            initialdir='/',
+            filetypes=self.dialog_filetypes
+        )
+
+        if len(selected_image_file) > 0:
+            self.current_image_file_path = os.path.abspath(selected_image_file)
+            self.show_page('img')
 
     def run(self):
         self.init_app()
