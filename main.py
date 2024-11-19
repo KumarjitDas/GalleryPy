@@ -1,6 +1,7 @@
 import argparse
 import os
 import platform
+import sys
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
@@ -77,6 +78,7 @@ class App:
         self.container = tk.Frame(master=self.root)
         self.windowing_system = self.root.tk.call('tk', 'windowingsystem')
         self.pages = {}
+        self.current_page = None
         self.page_items = {}
         self.frames = {}
         self.canvases = {}
@@ -88,6 +90,8 @@ class App:
         self.screen_height = self.root.winfo_screenheight()
         self.app_width = self.root.winfo_width()
         self.app_height = self.root.winfo_height()
+        self.current_image_width = 0
+        self.current_image_height = 0
 
         self.dialog_filetypes = (
             ('Image Files', ' '.join([f'*.{ext}' for ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS])),
@@ -149,12 +153,6 @@ class App:
             self.root_style.configure('TButton', foreground='black', font=('TkDefaultFont', 12))
             self.root_style.configure('TLabel', foreground='black', font=('TkDefaultFont', 14))
 
-    @staticmethod
-    def get_photo_from_image_path(image_file_path):
-        image_file_abs_path = os.path.abspath(image_file_path)
-        image = Image.open(image_file_abs_path)
-        return ImageTk.PhotoImage(image)
-
     def create_page_home(self):
         frame = tk.Frame(master=self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
@@ -191,11 +189,14 @@ class App:
         # frame.bind('<Configure>', self.on_home_page_frame_resize)
 
     def create_page_img(self):
-        frame = tk.Frame(self.container)
+        frame = tk.Frame(master=self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
-        main_img_view_canvas = tk.Canvas(master=frame, bg='yellow')
+        main_img_view_canvas = tk.Canvas(master=frame)
         main_img_view_canvas.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
+
+        status_frame = tk.Frame(master=frame, bg='red')
+        status_frame.pack(side=tk.BOTTOM, anchor=tk.S, fill=tk.X, padx=2, pady=2)
 
         self.canvases['main_img_view'] = main_img_view_canvas
         self.page_items['img'] = self.load_page_img_items
@@ -229,6 +230,7 @@ class App:
         page_item_fn = self.page_items.get(page_name)
 
         if frame:
+            self.current_page = page_name
             frame.tkraise()
             page_item_fn()
         else:
@@ -264,71 +266,64 @@ class App:
 
     def load_page_img_items(self):
         if self.current_image_file_path is None:
-            print('No image')
+            self.show_page('img_error')
         else:
-            pass
-            # current_photo = self.get_photo_from_image_path(self.current_image_file_path);
-            # current_canvas = tk.Canvas(master=center_frame, width=image_size, height=image_size)
-            # current_canvas.pack(fill=tk.BOTH, expand=True)
-            #
-            # canvas_width = current_canvas.winfo_width()
-            # canvas_height = current_canvas.winfo_height()
-            # canvas_width = image_size if canvas_width < image_size else canvas_width
-            # canvas_height = image_size if canvas_height < image_size else canvas_height
-            #
-            # current_canvas.create_image(canvas_width // 2, canvas_height // 2, anchor=tk.CENTER, image=current_photo)
-            # current_canvas.image = current_photo
-            #
-            # self.canvases['empty_folder'] = current_canvas
-            # self.images['empty_folder'] = empty_folder_image
-            # self.photos['empty_folder'] = current_photo
-            #
-            # self.resize_home_page_items()
+            try:
+                main_img_view_canvas = self.canvases['main_img_view']
+                current_image = Image.open(self.current_image_file_path)
+                current_photo = ImageTk.PhotoImage(current_image)
+
+                main_img_view_canvas.create_image(
+                    main_img_view_canvas.winfo_width() // 2,
+                    main_img_view_canvas.winfo_height() // 2,
+                    anchor=tk.CENTER,
+                    image=current_photo
+                )
+                main_img_view_canvas.image = current_photo
+
+                self.current_image_width = current_image.width
+                self.current_image_height = current_image.height
+
+                screen_width = self.screen_width * 0.9
+                screen_height = self.screen_height * 0.8
+
+                app_width = self.root.winfo_width()
+                app_height = self.root.winfo_height()
+
+                if (screen_width >= self.current_image_width > app_width and
+                        screen_height >= self.current_image_height > app_height):
+                    self.root.geometry(str(self.current_image_width) + 'x' + str(self.current_image_height))
+                elif self.current_image_width > app_width or self.current_image_height > app_height:
+                    new_size_ratio = self.current_image_width / self.current_image_height
+                    new_width = 0
+                    new_height = 0
+
+                    if self.current_image_width > self.current_image_height:
+                        new_width = int(screen_width)
+                        new_height = int(new_width / new_size_ratio)
+                    else:
+                        new_height = int(screen_height)
+                        new_width = int(new_height * new_size_ratio)
+
+                    self.root.geometry(
+                        str(new_width if new_width >= self.APP_WIDTH else self.APP_WIDTH) +
+                        'x' +
+                        str(new_height if new_height >= self.APP_HEIGHT else self.APP_HEIGHT)
+                    )
+
+                self.images['current'] = current_image
+                self.photos['current'] = current_photo
+
+                self.resize_img_page_items()
+            except Exception as e:
+                print(e, file=sys.stderr)
+                self.show_page('img_error')
 
     def load_page_img_error_items(self):
         pass
 
     def load_page_dirs_files_items(self):
         pass
-
-    def _resize_home_page_items_(self):
-        empty_folder_image = self.images.get('empty_folder')
-        empty_folder_photo = self.photos.get('empty_folder')
-
-        if empty_folder_image is None or empty_folder_photo is None:
-            return
-
-        empty_folder_canvas = self.canvases['empty_folder']
-        empty_folder_canvas_width = empty_folder_canvas.winfo_width()
-        empty_folder_canvas_height = empty_folder_canvas.winfo_height()
-
-        if empty_folder_canvas_width > 0 and empty_folder_canvas_height > 0:
-            empty_folder_image_ratio = empty_folder_image.width / empty_folder_image.height
-            empty_folder_canvas_ratio = empty_folder_canvas_width / empty_folder_canvas_height
-
-            if empty_folder_image_ratio > empty_folder_canvas_ratio:
-                new_width = empty_folder_canvas_width
-                new_height = new_width / empty_folder_image_ratio
-            else:
-                new_height = empty_folder_canvas_height
-                new_width = new_height * empty_folder_image_ratio
-
-            new_width = int(new_width)
-            new_height = int(new_height)
-
-            if new_width <= 0 or new_height <= 0:
-                return
-
-            resized_image = empty_folder_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            empty_folder_photo = ImageTk.PhotoImage(resized_image)
-
-            empty_folder_canvas.delete('all')
-
-            center_x = empty_folder_canvas_width // 2
-            center_y = empty_folder_canvas_height // 2
-
-            empty_folder_canvas.create_image(center_x, center_y, image=empty_folder_photo, anchor=tk.CENTER)
-            self.photos['empty_folder'] = empty_folder_photo
 
     def resize_home_page_items(self, event=None):
         empty_folder_image = self.images.get('empty_folder')
@@ -366,6 +361,49 @@ class App:
 
         self.photos['empty_folder'] = empty_folder_photo
 
+    def resize_img_page_items(self, event=None):
+        current_image = self.images.get('current')
+        current_photo = self.photos.get('current')
+
+        if current_image is None or current_photo is None:
+            return
+
+        main_img_view_canvas = self.canvases['main_img_view']
+        main_img_view_canvas_width = main_img_view_canvas.winfo_width()
+        main_img_view_canvas_height = main_img_view_canvas.winfo_height()
+
+        if main_img_view_canvas_width > 0 and main_img_view_canvas_height > 0:
+            current_image_ratio = current_image.width / current_image.height
+            main_img_view_canvas_ratio = main_img_view_canvas_width / main_img_view_canvas_height
+
+            if current_image_ratio > main_img_view_canvas_ratio:
+                new_width = main_img_view_canvas_width
+                new_height = new_width / current_image_ratio
+            else:
+                new_height = main_img_view_canvas_height
+                new_width = new_height * current_image_ratio
+
+            new_width = int(new_width)
+            new_height = int(new_height)
+
+            if new_width <= 0 or new_height <= 0:
+                return
+
+            new_width = self.current_image_width if new_width >= self.current_image_width else new_width
+            new_height = self.current_image_height if new_height >= self.current_image_height else new_height
+
+            resized_current_image = current_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            resized_current_photo = ImageTk.PhotoImage(resized_current_image)
+
+            main_img_view_canvas.delete('all')
+
+            center_x = main_img_view_canvas_width // 2
+            center_y = main_img_view_canvas_height // 2
+
+            main_img_view_canvas.create_image(center_x, center_y, image=resized_current_photo, anchor=tk.CENTER)
+
+            self.photos['current'] = resized_current_photo
+
     def on_minimize(self, event):
         if self.root.state() == 'iconic':
             print('Window minimized')
@@ -373,20 +411,27 @@ class App:
     def on_restore(self, event):
         if self.root.state() == 'normal':
             print('Window restored')
-            self.resize_home_page_items()
+            self.on_resize_callback()
 
     def on_configure(self, event):
         if self.root.state() == 'zoomed':
             print('Window maximized')
-            self.resize_home_page_items()
+            self.on_resize_callback()
         elif self.root.state() == 'normal':
             print('Window size configured')
 
             if (self.app_width != event.width) or (self.app_height != event.height):
                 self.app_width = event.width
                 self.app_height = event.height
+
                 print('Resizing...')
-                self.resize_home_page_items()
+                self.on_resize_callback()
+
+    def on_resize_callback(self):
+        if self.current_page == 'home':
+            self.resize_home_page_items()
+        elif self.current_page == 'img':
+            self.resize_img_page_items()
 
     def on_home_page_click(self, event):
         selected_image_file = filedialog.askopenfilename(
