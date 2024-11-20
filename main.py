@@ -2,7 +2,6 @@ import argparse
 import os
 import platform
 import sys
-from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 from tkinter.font import Font
@@ -16,7 +15,7 @@ class App:
     APP_NAME = 'GalleryPy'
     APP_GEOMETRY = str(APP_WIDTH) + 'x' + str(APP_HEIGHT)
 
-    APP_MIN_WIDTH = 16 * 20
+    APP_MIN_WIDTH = APP_WIDTH // 2
 
     APP_RESOURCES_PATH = os.path.abspath('resources/')
     APP_IMAGES_PATH = os.path.join(APP_RESOURCES_PATH, 'images')
@@ -56,6 +55,8 @@ class App:
         'dds',  # DDS
     ]
 
+    APP_PAGES = ['home', 'img', 'img_error', 'dirs_files']
+
     EMPTY_FOLDER_IMAGE_SIZE_MIN = 60
     EMPTY_FOLDER_IMAGE_SIZE_MAX = 120
 
@@ -75,17 +76,26 @@ class App:
         self.cmd = arguments
         self.root = tk.Tk()
         self.root_style = ttk.Style()
+        self.menubar = tk.Menu(master=self.root)
         self.container = tk.Frame(master=self.root)
         self.windowing_system = self.root.tk.call('tk', 'windowingsystem')
-        self.pages = {}
+        self.page_wise_data = {}
+        self.menu_items = {}
         self.current_page = None
-        self.page_items = {}
-        self.frames = {}
-        self.canvases = {}
-        self.labels = {}
-        self.fonts = {}
-        self.images = {}
-        self.photos = {}
+
+        for page_name in self.APP_PAGES:
+            self.page_wise_data[page_name] = {
+                'main_frame': None,
+                'page_item_loader': None,
+                'other_frames': {},
+                'canvases': {},
+                'fonts': {},
+                'labels': {},
+                'images': {},
+                'photos': {},
+                'string_vars': {}
+            }
+
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self.app_width = self.root.winfo_width()
@@ -100,8 +110,10 @@ class App:
         self.current_image_file_path = None
 
     def init_app(self):
+        self.root_style.theme_use('clam')
         self.set_min_width_height()
         self.apply_platform_styles()
+        self.create_menubar_items()
         self.create_page_home()
         self.create_page_img()
         self.create_page_img_error()
@@ -109,6 +121,7 @@ class App:
 
         self.root.title(self.APP_NAME)
         self.root.geometry(self.APP_GEOMETRY)
+        self.root.config(menu=self.menubar)
 
         self.root.bind('<Unmap>', self.on_minimize)
         self.root.bind('<Map>', self.on_restore)
@@ -153,6 +166,65 @@ class App:
             self.root_style.configure('TButton', foreground='black', font=('TkDefaultFont', 12))
             self.root_style.configure('TLabel', foreground='black', font=('TkDefaultFont', 14))
 
+    def create_menubar_items(self):
+        # The 'File' menu
+        file_menu = tk.Menu(self.menubar, tearoff=False)
+        file_menu.add_command(label='Open file(s)...', command=lambda: self.open_choose_img_files_dialog_and_show())
+        file_menu.add_command(label='Open directory...', command=lambda: '')
+        file_menu.add_command(label='Close image', state=tk.DISABLED, command=lambda: self.close_current_img())
+        file_menu.add_command(label='Delete image', state=tk.DISABLED, command=lambda: '')
+        file_menu.add_separator()
+
+        # The 'Export' submenu
+        export_submenu = tk.Menu(file_menu, tearoff=False)
+
+        for file_ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS:
+            export_submenu.add_command(label=file_ext, command=lambda: '')
+
+        file_menu.add_cascade(label='Export', state=tk.DISABLED, menu=export_submenu)
+
+        file_menu.add_command(label='Print', state=tk.DISABLED, command=lambda: '')
+        file_menu.add_separator()
+        file_menu.add_command(label='Exit', command=self.root.destroy)
+        self.menubar.add_cascade(label='File', menu=file_menu, underline=0)
+        self.menu_items['file'] = file_menu
+
+        # The 'Edit' menu
+        edit_menu = tk.Menu(self.menubar, tearoff=False)
+        edit_menu.add_command(label='Copy image', state=tk.DISABLED, command=lambda: '')
+        edit_menu.add_command(label='Copy path', state=tk.DISABLED, command=lambda: '')
+        edit_menu.add_command(label='Resize image', state=tk.DISABLED, command=lambda: '')
+        edit_menu.add_separator()
+        edit_menu.add_command(label='Settings', command=lambda: '')
+        self.menubar.add_cascade(label='Edit', menu=edit_menu, underline=0)
+        self.menu_items['edit'] = edit_menu
+
+        # The 'View' menu
+        view_menu = tk.Menu(self.menubar, tearoff=False)
+
+        # The 'Appearance' submenu
+        appearance_submenu = tk.Menu(view_menu, tearoff=False)
+        appearance_submenu.add_radiobutton(label='Light', command=lambda: '')
+        appearance_submenu.add_radiobutton(label='Dark', command=lambda: '')
+        view_menu.add_cascade(label='Appearance', menu=appearance_submenu)
+
+        # The 'Language' submenu
+        language_submenu = tk.Menu(view_menu, tearoff=False)
+        language_submenu.add_radiobutton(label='English', command=lambda: '')
+        language_submenu.add_radiobutton(label='Bangla', command=lambda: '')
+        view_menu.add_cascade(label='Language', menu=language_submenu)
+
+        view_menu.add_command(label='Image info', state=tk.DISABLED, command=lambda: '')
+        self.menubar.add_cascade(label='View', menu=view_menu, underline=0)
+        self.menu_items['view'] = view_menu
+
+        # The 'Help' menu
+        help_menu = tk.Menu(self.menubar, tearoff=False)
+        help_menu.add_command(label='Help', command=lambda: '')
+        help_menu.add_command(label='About...', command=lambda: '')
+        self.menubar.add_cascade(label='Help', menu=help_menu, underline=0)
+        self.menu_items['help'] = help_menu
+
     def create_page_home(self):
         frame = tk.Frame(master=self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
@@ -177,12 +249,11 @@ class App:
         )
         empty_folder_label.pack(side=tk.BOTTOM, anchor=tk.N, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        self.canvases['empty_folder'] = empty_folder_canvas
-        self.fonts['empty_folder'] = empty_folder_label_font
-        self.labels['empty_folder'] = empty_folder_label
-        self.page_items['home'] = self.load_page_home_items
-        self.pages['home'] = frame
-        self.frames['home'] = frame
+        self.page_wise_data['home']['canvases']['empty_folder'] = empty_folder_canvas
+        self.page_wise_data['home']['fonts']['empty_folder'] = empty_folder_label_font
+        self.page_wise_data['home']['labels']['empty_folder'] = empty_folder_label
+        self.page_wise_data['home']['page_item_loader'] = self.load_page_home_items
+        self.page_wise_data['home']['main_frame'] = frame
 
         empty_folder_canvas.bind('<Button-1>', self.on_home_page_click)
         empty_folder_label.bind('<Button-1>', self.on_home_page_click)
@@ -195,24 +266,47 @@ class App:
         main_img_view_canvas = tk.Canvas(master=frame)
         main_img_view_canvas.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
 
-        status_frame = tk.Frame(master=frame, bg='red')
+        status_frame = tk.Frame(master=frame)
         status_frame.pack(side=tk.BOTTOM, anchor=tk.S, fill=tk.X, padx=2, pady=2)
 
-        self.canvases['main_img_view'] = main_img_view_canvas
-        self.page_items['img'] = self.load_page_img_items
-        self.pages['img'] = frame
-        self.frames['img'] = frame
+        current_img_dir_path = tk.StringVar(master=status_frame, value='[NIL]')
+        current_img_dim = tk.StringVar(master=status_frame, value='0x0')
+        current_img_file_size = tk.StringVar(master=status_frame, value='0 Bytes')
+        current_img_format = tk.StringVar(master=status_frame, value='[UNKNOWN]')
+
+        current_img_dir_label = ttk.Label(master=status_frame, textvariable=current_img_dir_path)
+        current_img_format_label = ttk.Label(master=status_frame, textvariable=current_img_format)
+        current_img_file_size_label = ttk.Label(master=status_frame, textvariable=current_img_file_size)
+        current_img_dim_label = ttk.Label(master=status_frame, textvariable=current_img_dim)
+
+        current_img_dir_label.pack(side=tk.LEFT, anchor=tk.W)
+        current_img_format_label.pack(side=tk.RIGHT, anchor=tk.E)
+        current_img_file_size_label.pack(side=tk.RIGHT, anchor=tk.E, padx=2)
+        current_img_dim_label.pack(side=tk.RIGHT, anchor=tk.E)
+
+        self.page_wise_data['img']['string_vars']['current_img_dir_path'] = current_img_dir_path
+        self.page_wise_data['img']['string_vars']['current_img_dim'] = current_img_dim
+        self.page_wise_data['img']['string_vars']['current_img_file_size'] = current_img_file_size
+        self.page_wise_data['img']['string_vars']['current_img_format'] = current_img_format
+
+        self.page_wise_data['img']['labels']['current_img_dir'] = current_img_dir_label
+        self.page_wise_data['img']['labels']['current_img_dim'] = current_img_dim_label
+        self.page_wise_data['img']['labels']['current_img_file_size'] = current_img_file_size_label
+        self.page_wise_data['img']['labels']['current_img_format'] = current_img_format_label
+
+        self.page_wise_data['img']['canvases']['main_img_view'] = main_img_view_canvas
+        self.page_wise_data['img']['page_item_loader'] = self.load_page_img_items
+        self.page_wise_data['img']['main_frame'] = frame
 
     def create_page_img_error(self):
         frame = tk.Frame(self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
-        label = ttk.Label(frame, text="Could not show image.", background="red", foreground="white")
+        label = ttk.Label(frame, text='Could not show image.', background='red', foreground='#FFFFFF')
         label.pack(side=tk.TOP, anchor=tk.N, fill=tk.X, expand=True)
 
-        self.page_items['img_error'] = self.load_page_img_error_items
-        self.pages['img_error'] = frame
-        self.frames['img_error'] = frame
+        self.page_wise_data['img_error']['page_item_loader'] = self.load_page_img_error_items
+        self.page_wise_data['img_error']['main_frame'] = frame
 
     def create_page_dirs_files(self):
         frame = tk.Frame(self.container)
@@ -221,28 +315,32 @@ class App:
         label = ttk.Label(frame, text="Welcome", background="red", foreground="white")
         label.pack(side=tk.BOTTOM, anchor=tk.S, fill=tk.X, expand=True)
 
-        self.page_items['dirs_files'] = self.load_page_dirs_files_items
-        self.pages['dirs_files'] = frame
-        self.frames['dirs_files'] = frame
+        self.page_wise_data['dirs_files']['page_item_loader'] = self.load_page_dirs_files_items
+        self.page_wise_data['dirs_files']['main_frame'] = frame
 
     def show_page(self, page_name):
-        frame = self.pages.get(page_name)
-        page_item_fn = self.page_items.get(page_name)
+        page_data = self.page_wise_data.get(page_name)
 
-        if frame:
-            self.current_page = page_name
+        if page_data:
+            frame = page_data.get('main_frame')
+            page_item_loader = page_data.get('page_item_loader')
+
             frame.tkraise()
-            page_item_fn()
+            page_item_loader()
+
+            self.current_page = page_name
         else:
             print(f"Page '{page_name}' does not exist.")
 
     def load_page_home_items(self):
+        page_data = self.page_wise_data.get('home')
+
         image_size = self.EMPTY_FOLDER_IMAGE_SIZE_MAX
         empty_folder_image_path = os.path.join(self.APP_IMAGES_PATH, 'empty-folder.png')
         empty_folder_image = Image.open(empty_folder_image_path).resize((image_size, image_size), Image.Resampling.LANCZOS)
         empty_folder_photo = ImageTk.PhotoImage(empty_folder_image)
 
-        empty_folder_canvas = self.canvases.get('empty_folder')
+        empty_folder_canvas = page_data['canvases']['empty_folder']
         empty_folder_canvas.config(width=image_size, height=image_size)
 
         canvas_width = empty_folder_canvas.winfo_width()
@@ -258,9 +356,18 @@ class App:
         )
         empty_folder_canvas.image = empty_folder_photo
 
-        self.canvases['empty_folder'] = empty_folder_canvas
-        self.images['empty_folder'] = empty_folder_image
-        self.photos['empty_folder'] = empty_folder_photo
+        page_data['canvases']['empty_folder'] = empty_folder_canvas
+        page_data['images']['empty_folder'] = empty_folder_image
+        page_data['photos']['empty_folder'] = empty_folder_photo
+
+        self.root.title(self.APP_NAME)
+
+        self.menu_items['file'].entryconfig('Close image', state=tk.DISABLED)
+        self.menu_items['file'].entryconfig('Delete image', state=tk.DISABLED)
+
+        self.menu_items['edit'].entryconfig('Copy image', state=tk.DISABLED)
+        self.menu_items['edit'].entryconfig('Copy path', state=tk.DISABLED)
+        self.menu_items['edit'].entryconfig('Resize image', state=tk.DISABLED)
 
         self.resize_home_page_items()
 
@@ -269,7 +376,9 @@ class App:
             self.show_page('img_error')
         else:
             try:
-                main_img_view_canvas = self.canvases['main_img_view']
+                page_data = self.page_wise_data.get('img')
+
+                main_img_view_canvas = page_data['canvases']['main_img_view']
                 current_image = Image.open(self.current_image_file_path)
                 current_photo = ImageTk.PhotoImage(current_image)
 
@@ -311,8 +420,28 @@ class App:
                         str(new_height if new_height >= self.APP_HEIGHT else self.APP_HEIGHT)
                     )
 
-                self.images['current'] = current_image
-                self.photos['current'] = current_photo
+                page_data['images']['current'] = current_image
+                page_data['photos']['current'] = current_photo
+
+                current_image_file_base_name = os.path.basename(self.current_image_file_path)
+                current_image_file_name = os.path.splitext(current_image_file_base_name)[0]
+                self.root.title(self.APP_NAME + ' - ' + current_image_file_name)
+
+                self.menu_items['file'].entryconfig('Close image', state=tk.ACTIVE)
+                self.menu_items['file'].entryconfig('Delete image', state=tk.ACTIVE)
+
+                self.menu_items['edit'].entryconfig('Copy image', state=tk.ACTIVE)
+                self.menu_items['edit'].entryconfig('Copy path', state=tk.ACTIVE)
+                self.menu_items['edit'].entryconfig('Resize image', state=tk.ACTIVE)
+
+                current_image_dir_name = os.path.dirname(self.current_image_file_path)
+                current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
+                current_imd_file_size = self.get_readable_file_size(self.current_image_file_path)
+
+                page_data['string_vars']['current_img_dir_path'].set(current_image_dir_name)
+                page_data['string_vars']['current_img_dim'].set(current_img_dim)
+                page_data['string_vars']['current_img_file_size'].set(current_imd_file_size)
+                page_data['string_vars']['current_img_format'].set(current_image.format)
 
                 self.resize_img_page_items()
             except Exception as e:
@@ -325,15 +454,17 @@ class App:
     def load_page_dirs_files_items(self):
         pass
 
-    def resize_home_page_items(self, event=None):
-        empty_folder_image = self.images.get('empty_folder')
-        empty_folder_photo = self.photos.get('empty_folder')
+    def resize_home_page_items(self):
+        page_data = self.page_wise_data.get('home')
+
+        empty_folder_image = page_data['images']['empty_folder']
+        empty_folder_photo = page_data['photos']['empty_folder']
 
         if empty_folder_image is None or empty_folder_photo is None:
             return
 
-        empty_folder_canvas = self.canvases['empty_folder']
-        empty_folder_font = self.fonts['empty_folder']
+        empty_folder_canvas = page_data['canvases']['empty_folder']
+        empty_folder_font = page_data['fonts']['empty_folder']
 
         root_width = self.root.winfo_width()
         root_height = self.root.winfo_height()
@@ -359,16 +490,18 @@ class App:
             anchor=tk.CENTER
         )
 
-        self.photos['empty_folder'] = empty_folder_photo
+        page_data['photos']['empty_folder'] = empty_folder_photo
 
-    def resize_img_page_items(self, event=None):
-        current_image = self.images.get('current')
-        current_photo = self.photos.get('current')
+    def resize_img_page_items(self):
+        page_data = self.page_wise_data.get('img')
+
+        current_image = page_data['images']['current']
+        current_photo = page_data['photos']['current']
 
         if current_image is None or current_photo is None:
             return
 
-        main_img_view_canvas = self.canvases['main_img_view']
+        main_img_view_canvas = page_data['canvases']['main_img_view']
         main_img_view_canvas_width = main_img_view_canvas.winfo_width()
         main_img_view_canvas_height = main_img_view_canvas.winfo_height()
 
@@ -402,29 +535,47 @@ class App:
 
             main_img_view_canvas.create_image(center_x, center_y, image=resized_current_photo, anchor=tk.CENTER)
 
-            self.photos['current'] = resized_current_photo
+            page_data['photos']['current'] = resized_current_photo
+
+    def open_choose_img_files_dialog_and_show(self):
+        selected_image_files = filedialog.askopenfilenames(
+            title='Select image file(s)/directory',
+            initialdir='/',
+            filetypes=self.dialog_filetypes
+        )
+
+        if len(selected_image_files) > 0:
+            self.current_image_file_path = os.path.abspath(selected_image_files[0])
+            self.show_page('img')
+
+    def close_current_img(self):
+        page_data = self.page_wise_data.get('img')
+
+        page_data['images']['current'] = None
+        page_data['photos']['current'] = None
+
+        page_data['string_vars']['current_img_dir_path'].set('[NIL]')
+        page_data['string_vars']['current_img_dim'].set('0x0')
+        page_data['string_vars']['current_img_file_size'].set('0 B')
+        page_data['string_vars']['current_img_format'].set('[NIL]')
+
+        self.show_page('home')
 
     def on_minimize(self, event):
         if self.root.state() == 'iconic':
-            print('Window minimized')
+            pass
 
     def on_restore(self, event):
         if self.root.state() == 'normal':
-            print('Window restored')
             self.on_resize_callback()
 
     def on_configure(self, event):
         if self.root.state() == 'zoomed':
-            print('Window maximized')
             self.on_resize_callback()
         elif self.root.state() == 'normal':
-            print('Window size configured')
-
             if (self.app_width != event.width) or (self.app_height != event.height):
                 self.app_width = event.width
                 self.app_height = event.height
-
-                print('Resizing...')
                 self.on_resize_callback()
 
     def on_resize_callback(self):
@@ -434,20 +585,28 @@ class App:
             self.resize_img_page_items()
 
     def on_home_page_click(self, event):
-        selected_image_file = filedialog.askopenfilename(
-            title='Select image file(s)/directory',
-            initialdir='/',
-            filetypes=self.dialog_filetypes
-        )
-
-        if len(selected_image_file) > 0:
-            self.current_image_file_path = os.path.abspath(selected_image_file)
-            self.show_page('img')
+        self.open_choose_img_files_dialog_and_show()
 
     def run(self):
         self.init_app()
         self.show_page('home')
         self.root.mainloop()
+
+    @staticmethod
+    def get_readable_file_size(file_path):
+        size_bytes = os.path.getsize(file_path)
+
+        if size_bytes < 1024:
+            return f'{size_bytes} B'
+        elif size_bytes < 1024 ** 2:
+            size_kb = size_bytes / 1024
+            return f'{size_kb:.2f} KB'
+        elif size_bytes < 1024 ** 3:
+            size_mb = size_bytes / (1024 ** 2)
+            return f'{size_mb:.2f} MB'
+        else:
+            size_gb = size_bytes / (1024 ** 3)
+            return f'{size_gb:.2f} GB'
 
     def __str__(self):
         return """
