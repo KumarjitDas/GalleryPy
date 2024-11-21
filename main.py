@@ -3,13 +3,14 @@ import os
 import platform
 import sys
 import tkinter as tk
+import traceback
 from tkinter import ttk
 from tkinter.font import Font
 from tkinter import filedialog
 from PIL import Image, ImageTk
 
 
-# noinspection PyTypedDict,PyCallingNonCallable,DuplicatedCode
+# noinspection PyTypedDict,PyCallingNonCallable,DuplicatedCode,PyTypeChecker
 class App:
     APP_WIDTH = 640
     APP_HEIGHT = 400
@@ -85,6 +86,7 @@ class App:
         self.page_wise_data = {}
         self.menu_items = {}
         self.current_page = None
+        self.timeout_callbacks = {}
 
         for page_name in self.APP_PAGES:
             self.page_wise_data[page_name] = {
@@ -110,7 +112,9 @@ class App:
             ('Image Files', ' '.join([f'*.{ext}' for ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS])),
         )
 
+        self.current_image_file_idx = None
         self.current_image_file_path = None
+        self.current_image_file_paths = []
 
     def init_app(self):
         self.set_min_width_height()
@@ -372,32 +376,48 @@ class App:
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
         main_img_view_canvas = tk.Canvas(master=frame, **self.root_style_canvas_params)
-        main_img_view_canvas.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
+        main_img_view_canvas.grid(row=0, column=0, sticky=tk.NSEW)
 
         status_frame = ttk.Frame(master=frame)
-        status_frame.pack(side=tk.BOTTOM, anchor=tk.S, fill=tk.X, padx=2, pady=2)
+        status_frame.grid(row=1, column=0, sticky=tk.EW)
+
+        frame.grid_rowconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=0)
+        frame.grid_columnconfigure(0, weight=1)
 
         current_img_dir_path = tk.StringVar(master=status_frame, value='[NIL]')
+        current_img_idx = tk.StringVar(master=status_frame, value='0/0')
         current_img_dim = tk.StringVar(master=status_frame, value='0x0')
         current_img_file_size = tk.StringVar(master=status_frame, value='0 Bytes')
         current_img_format = tk.StringVar(master=status_frame, value='[UNKNOWN]')
 
         current_img_dir_label = ttk.Label(master=status_frame, textvariable=current_img_dir_path)
-        current_img_format_label = ttk.Label(master=status_frame, textvariable=current_img_format)
-        current_img_file_size_label = ttk.Label(master=status_frame, textvariable=current_img_file_size)
+        current_img_idx_label = ttk.Label(master=status_frame, textvariable=current_img_idx)
         current_img_dim_label = ttk.Label(master=status_frame, textvariable=current_img_dim)
+        current_img_file_size_label = ttk.Label(master=status_frame, textvariable=current_img_file_size)
+        current_img_format_label = ttk.Label(master=status_frame, textvariable=current_img_format)
 
-        current_img_dir_label.pack(side=tk.LEFT, anchor=tk.W)
-        current_img_format_label.pack(side=tk.RIGHT, anchor=tk.E)
-        current_img_file_size_label.pack(side=tk.RIGHT, anchor=tk.E, padx=2)
-        current_img_dim_label.pack(side=tk.RIGHT, anchor=tk.E)
+        current_img_dir_label.grid(row=0, column=0, sticky=tk.W, padx=4)
+        current_img_idx_label.grid(row=0, column=2, padx=4)
+        current_img_dim_label.grid(row=0, column=3, padx=4)
+        current_img_file_size_label.grid(row=0, column=4, padx=4)
+        current_img_format_label.grid(row=0, column=5, padx=4)
+
+        status_frame.grid_columnconfigure(0, weight=0)
+        status_frame.grid_columnconfigure(1, weight=1)
+        status_frame.grid_columnconfigure(2, weight=0)
+        status_frame.grid_columnconfigure(3, weight=0)
+        status_frame.grid_columnconfigure(4, weight=0)
+        status_frame.grid_columnconfigure(5, weight=0)
 
         self.page_wise_data['img']['string_vars']['current_img_dir_path'] = current_img_dir_path
+        self.page_wise_data['img']['string_vars']['current_img_idx'] = current_img_idx
         self.page_wise_data['img']['string_vars']['current_img_dim'] = current_img_dim
         self.page_wise_data['img']['string_vars']['current_img_file_size'] = current_img_file_size
         self.page_wise_data['img']['string_vars']['current_img_format'] = current_img_format
 
         self.page_wise_data['img']['labels']['current_img_dir'] = current_img_dir_label
+        self.page_wise_data['img']['labels']['current_img_idx'] = current_img_idx_label
         self.page_wise_data['img']['labels']['current_img_dim'] = current_img_dim_label
         self.page_wise_data['img']['labels']['current_img_file_size'] = current_img_file_size_label
         self.page_wise_data['img']['labels']['current_img_format'] = current_img_format_label
@@ -405,6 +425,9 @@ class App:
         self.page_wise_data['img']['canvases']['main_img_view'] = main_img_view_canvas
         self.page_wise_data['img']['page_item_loader'] = self.load_page_img_items
         self.page_wise_data['img']['main_frame'] = frame
+
+        frame.bind('<Left>', lambda _: self.show_prev_img())
+        frame.bind('<Right>', lambda _: self.show_next_img())
 
     def create_page_img_error(self):
         frame = ttk.Frame(self.container)
@@ -484,56 +507,8 @@ class App:
             self.show_page('img_error')
         else:
             try:
+                self.show_current_img()
                 page_data = self.page_wise_data.get('img')
-
-                main_img_view_canvas = page_data['canvases']['main_img_view']
-                current_image = Image.open(self.current_image_file_path)
-                current_photo = ImageTk.PhotoImage(current_image)
-
-                main_img_view_canvas.create_image(
-                    main_img_view_canvas.winfo_width() // 2,
-                    main_img_view_canvas.winfo_height() // 2,
-                    anchor=tk.CENTER,
-                    image=current_photo
-                )
-                main_img_view_canvas.image = current_photo
-
-                self.current_image_width = current_image.width
-                self.current_image_height = current_image.height
-
-                screen_width = self.screen_width * 0.9
-                screen_height = self.screen_height * 0.8
-
-                app_width = self.root.winfo_width()
-                app_height = self.root.winfo_height()
-
-                if (screen_width >= self.current_image_width > app_width and
-                        screen_height >= self.current_image_height > app_height):
-                    self.root.geometry(str(self.current_image_width) + 'x' + str(self.current_image_height))
-                elif self.current_image_width > app_width or self.current_image_height > app_height:
-                    new_size_ratio = self.current_image_width / self.current_image_height
-                    new_width = 0
-                    new_height = 0
-
-                    if self.current_image_width > self.current_image_height:
-                        new_width = int(screen_width)
-                        new_height = int(new_width / new_size_ratio)
-                    else:
-                        new_height = int(screen_height)
-                        new_width = int(new_height * new_size_ratio)
-
-                    self.root.geometry(
-                        str(new_width if new_width >= self.APP_WIDTH else self.APP_WIDTH) +
-                        'x' +
-                        str(new_height if new_height >= self.APP_HEIGHT else self.APP_HEIGHT)
-                    )
-
-                page_data['images']['current'] = current_image
-                page_data['photos']['current'] = current_photo
-
-                current_image_file_base_name = os.path.basename(self.current_image_file_path)
-                current_image_file_name = os.path.splitext(current_image_file_base_name)[0]
-                self.root.title(self.APP_NAME + ' - ' + current_image_file_name)
 
                 self.menu_items['file'].entryconfig('Close image', state=tk.ACTIVE)
                 self.menu_items['file'].entryconfig('Delete image', state=tk.ACTIVE)
@@ -543,15 +518,9 @@ class App:
                 self.menu_items['edit'].entryconfig('Resize image', state=tk.ACTIVE)
 
                 current_image_dir_name = os.path.dirname(self.current_image_file_path)
-                current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
-                current_imd_file_size = self.get_readable_file_size(self.current_image_file_path)
 
                 page_data['string_vars']['current_img_dir_path'].set(current_image_dir_name)
-                page_data['string_vars']['current_img_dim'].set(current_img_dim)
-                page_data['string_vars']['current_img_file_size'].set(current_imd_file_size)
-                page_data['string_vars']['current_img_format'].set(current_image.format)
-
-                self.resize_img_page_items()
+                page_data['string_vars']['current_img_idx'].set('1/?')
             except Exception as e:
                 print(e, file=sys.stderr)
                 self.show_page('img_error')
@@ -654,7 +623,126 @@ class App:
 
         if len(selected_image_files) > 0:
             self.current_image_file_path = os.path.abspath(selected_image_files[0])
+            self.set_timeout(self.load_other_img_files, 'load_other_img_files')
             self.show_page('img')
+
+    def show_current_img(self, resizeframe=True):
+        page_data = self.page_wise_data.get('img')
+
+        main_img_view_canvas = page_data['canvases']['main_img_view']
+        current_image = Image.open(self.current_image_file_path)
+        current_photo = ImageTk.PhotoImage(current_image)
+
+        current_image_file_base_name = os.path.basename(self.current_image_file_path)
+        current_image_file_name = os.path.splitext(current_image_file_base_name)[0]
+        self.root.title(self.APP_NAME + ' - ' + current_image_file_name)
+
+        main_img_view_canvas.create_image(
+            main_img_view_canvas.winfo_width() // 2,
+            main_img_view_canvas.winfo_height() // 2,
+            anchor=tk.CENTER,
+            image=current_photo
+        )
+        main_img_view_canvas.image = current_photo
+
+        if resizeframe:
+            self.current_image_width = current_image.width
+            self.current_image_height = current_image.height
+
+            screen_width = self.screen_width * 0.9
+            screen_height = self.screen_height * 0.8
+
+            app_width = self.root.winfo_width()
+            app_height = self.root.winfo_height() + page_data['labels']['current_img_file_size'].winfo_reqheight()
+
+            if (screen_width >= self.current_image_width > app_width and
+                    screen_height >= self.current_image_height > app_height):
+                self.root.geometry(str(self.current_image_width) + 'x' + str(self.current_image_height))
+            elif self.current_image_width > app_width or self.current_image_height > app_height:
+                new_size_ratio = self.current_image_width / self.current_image_height
+
+                if self.current_image_width > self.current_image_height:
+                    new_width = int(screen_width)
+                    new_height = int(new_width / new_size_ratio)
+                else:
+                    new_height = int(screen_height)
+                    new_width = int(new_height * new_size_ratio)
+
+                self.root.geometry(
+                    str(new_width if new_width >= self.APP_WIDTH else self.APP_WIDTH) +
+                    'x' +
+                    str(new_height if new_height >= self.APP_HEIGHT else self.APP_HEIGHT)
+                )
+
+        current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
+        current_imd_file_size = self.get_readable_file_size(self.current_image_file_path)
+
+        page_data['string_vars']['current_img_dim'].set(current_img_dim)
+        page_data['string_vars']['current_img_file_size'].set(current_imd_file_size)
+        page_data['string_vars']['current_img_format'].set(current_image.format)
+
+        page_data['string_vars']['current_img_idx'].set(
+            (str(self.current_image_file_idx + 1) if self.current_image_file_idx is not None else '1') +
+            '/' +
+            (str(len(self.current_image_file_paths)) if len(self.current_image_file_paths) > 0 else '?')
+        )
+
+        page_data['images']['current'] = current_image
+        page_data['photos']['current'] = current_photo
+
+        page_data['main_frame'].focus_set()
+        self.resize_img_page_items()
+
+    def show_idx_img(self):
+        self.current_image_file_path = self.current_image_file_paths[self.current_image_file_idx]
+        self.show_current_img(resizeframe=False)
+
+    def show_prev_img(self):
+        if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
+            self.current_image_file_idx -= 1
+
+            if self.current_image_file_idx < 0:
+                self.current_image_file_idx = len(self.current_image_file_paths) - 1
+
+            self.show_idx_img()
+
+    def show_next_img(self):
+        if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
+            self.current_image_file_idx += 1
+
+            if self.current_image_file_idx == len(self.current_image_file_paths):
+                self.current_image_file_idx = 0
+
+            self.show_idx_img()
+
+    def load_other_img_files(self):
+        page_data = self.page_wise_data.get('img')
+        current_image_dir_name = os.path.dirname(self.current_image_file_path)
+
+        if not os.path.isdir(current_image_dir_name):
+            raise ValueError(f"The provided path '{current_image_dir_name}' is not a valid directory.")
+
+        file_extensions = tuple(self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS)
+        file_paths = []
+
+        for entry in os.scandir(current_image_dir_name):
+            if entry.is_file():
+                if entry.name.lower().endswith(file_extensions):
+                    file_paths.append(entry.path)
+
+        self.current_image_file_paths = file_paths
+        current_image_file_idx = file_paths.index(self.current_image_file_path)
+
+        if current_image_file_idx >= 0:
+            self.current_image_file_idx = current_image_file_idx
+
+            page_data['string_vars']['current_img_idx'].set(
+                str(current_image_file_idx + 1) +
+                '/' +
+                str(len(file_paths))
+            )
+        else:
+            self.current_image_file_idx = None
 
     def close_current_img(self):
         page_data = self.page_wise_data.get('img')
@@ -663,6 +751,7 @@ class App:
         page_data['photos']['current'] = None
 
         page_data['string_vars']['current_img_dir_path'].set('[NIL]')
+        page_data['string_vars']['current_img_idx'].set('0/0')
         page_data['string_vars']['current_img_dim'].set('0x0')
         page_data['string_vars']['current_img_file_size'].set('0 B')
         page_data['string_vars']['current_img_format'].set('[NIL]')
@@ -688,9 +777,9 @@ class App:
 
     def on_resize_callback(self):
         if self.current_page == 'home':
-            self.resize_home_page_items()
+            self.set_timeout(self.resize_home_page_items, 'resize_home_page_items')
         elif self.current_page == 'img':
-            self.resize_img_page_items()
+            self.set_timeout(self.resize_img_page_items, 'resize_img_page_items')
 
     def on_home_page_click(self, event):
         self.open_choose_img_files_dialog_and_show()
@@ -699,6 +788,16 @@ class App:
         self.init_app()
         self.show_page('home')
         self.root.mainloop()
+
+    def set_timeout(self, func, funcid, ms=300):
+        if self.timeout_callbacks.get(funcid) is None:
+            self.timeout_callbacks[funcid] = True
+
+            def callback():
+                del self.timeout_callbacks[funcid]
+                func()
+
+            self.root.after(ms, callback)
 
     @staticmethod
     def get_readable_file_size(file_path):
