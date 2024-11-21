@@ -9,6 +9,7 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 
 
+# noinspection PyTypedDict,PyCallingNonCallable,DuplicatedCode
 class App:
     APP_WIDTH = 640
     APP_HEIGHT = 400
@@ -76,8 +77,10 @@ class App:
         self.cmd = arguments
         self.root = tk.Tk()
         self.root_style = ttk.Style()
+        self.root_style_canvas_params = {}
+
         self.menubar = tk.Menu(master=self.root)
-        self.container = tk.Frame(master=self.root)
+        self.container = ttk.Frame(master=self.root)
         self.windowing_system = self.root.tk.call('tk', 'windowingsystem')
         self.page_wise_data = {}
         self.menu_items = {}
@@ -110,9 +113,9 @@ class App:
         self.current_image_file_path = None
 
     def init_app(self):
-        self.root_style.theme_use('clam')
         self.set_min_width_height()
-        self.apply_platform_styles()
+        self.apply_platform_themes_styles()
+        self.root_style.theme_use('gallerypy_light')
         self.create_menubar_items()
         self.create_page_home()
         self.create_page_img()
@@ -144,27 +147,132 @@ class App:
 
         self.root.minsize(width=min_width, height=min_height)
 
-    def apply_platform_styles(self):
+    def apply_platform_themes_styles(self):
+        settings = {}
+
         if self.windowing_system == 'aqua':
             # macOS specific styling
-            self.root_style.theme_use('clam')
-            self.root_style.configure('TButton', foreground='blue', font=('Helvetica', 12))
-            self.root_style.configure('TLabel', foreground='dark green', font=('Helvetica', 14))
+            settings['TButton'] = {
+                'configure': {
+                    'foreground': 'blue',
+                    'background': '#1E1F22',
+                    'font': ('Helvetica', 10),
+                    'padding': 10
+                },
+                'map': {
+                    'background': [('active', 'skyblue'), ('pressed', 'deepskyblue')],
+                    'foreground': [('disabled', 'gray')]
+                }
+            }
+
+            settings['TLabel'] = {
+                'configure': {
+                    'foreground': 'dark green',
+                    'font': ('Helvetica', 10)
+                }
+            }
+
+            self.root_style.theme_create("gallerypy_light", parent='clam', settings=settings)
         elif self.windowing_system == 'win32':
             # Windows specific styling
-            self.root_style.theme_use('default')
-            self.root_style.configure('TButton', foreground='dark red', font=('Arial', 12, 'bold'))
-            self.root_style.configure('TLabel', foreground='purple', font=('Arial', 14, 'italic'))
+            # self.root_style.configure('TButton', foreground='dark red', font=('Arial', 10, 'bold'))
+            # self.root_style.configure('TLabel', foreground='purple', font=('Arial', 10, 'italic'))
+
+            settings['TFrame'] = {
+                'configure': {
+                    'foreground': '#212529',
+                    'background': '#EBECF0',
+                    'font': ('Arial', 9)
+                }
+            }
+
+            settings['TLabel'] = {
+                'configure': {
+                    'foreground': '#212529',
+                    'background': '#EBECF0',
+                    'font': ('Arial', 9)
+                }
+            }
+
+            settings['TButton'] = {
+                'configure': {
+                    'foreground': 'blue',
+                    'background': '#EBECF0',
+                    'font': ('Arial', 8),
+                    'padding': (2, 5, 2, 5)
+                },
+                'map': {
+                    'background': [
+                        ('active', 'skyblue'),
+                        ('pressed', 'deepskyblue')
+                    ],
+                    'foreground': [
+                        ('disabled', 'gray')
+                    ]
+                }
+            }
+
+            self.root_style_canvas_params = {
+                'background': settings['TFrame']['configure']['background'],
+                'borderwidth': 0,
+                'bd': 0,
+                'highlightthickness': 0,
+                'relief': 'groove'
+            }
+
+            self.root_style.theme_create("gallerypy_light", parent='default', settings=settings)
         elif self.windowing_system == 'x11':
             # Linux specific styling
-            self.root_style.theme_use('alt')
-            self.root_style.configure('TButton', foreground='dark blue', font=('Courier', 12))
-            self.root_style.configure('TLabel', foreground='brown', font=('Courier', 14))
+            # self.root_style.configure('TButton', foreground='dark blue', font=('Courier', 10))
+            # self.root_style.configure('TLabel', foreground='brown', font=('Courier', 10))
+
+            settings['TButton'] = {
+                'configure': {
+                    'foreground': 'blue',
+                    'background': '#1E1F22',
+                    'font': ('Helvetica', 10),
+                    'padding': 10
+                },
+                'map': {
+                    'background': [('active', 'skyblue'), ('pressed', 'deepskyblue')],
+                    'foreground': [('disabled', 'gray')]
+                }
+            }
+
+            settings['TLabel'] = {
+                'configure': {
+                    'foreground': 'dark green',
+                    'font': ('Helvetica', 10)
+                }
+            }
+
+            self.root_style.theme_create("gallerypy_light", parent='alt', settings=settings)
         else:
             # Default styling for other systems
-            self.root_style.theme_use('default')
-            self.root_style.configure('TButton', foreground='black', font=('TkDefaultFont', 12))
-            self.root_style.configure('TLabel', foreground='black', font=('TkDefaultFont', 14))
+            # self.root_style.configure('TButton', foreground='black', font=('TkDefaultFont', 10))
+            # self.root_style.configure('TLabel', foreground='black', font=('TkDefaultFont', 10))
+
+            settings['TButton'] = {
+                'configure': {
+                    'foreground': 'blue',
+                    'background': '#1E1F22',
+                    'font': ('Helvetica', 10),
+                    'padding': 10
+                },
+                'map': {
+                    'background': [('active', 'skyblue'), ('pressed', 'deepskyblue')],
+                    'foreground': [('disabled', 'gray')]
+                }
+            }
+
+            settings['TLabel'] = {
+                'configure': {
+                    'foreground': 'dark green',
+                    'font': ('Helvetica', 10)
+                }
+            }
+
+            self.root_style.theme_create("gallerypy_light", parent='default', settings=settings)
 
     def create_menubar_items(self):
         # The 'File' menu
@@ -226,16 +334,16 @@ class App:
         self.menu_items['help'] = help_menu
 
     def create_page_home(self):
-        frame = tk.Frame(master=self.container)
+        frame = ttk.Frame(master=self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
         center_frame = ttk.Frame(master=frame, width=50, height=50)
         center_frame.place(relx=0.5, rely=0.45, anchor=tk.CENTER)
 
-        empty_folder_canvas = tk.Canvas(master=center_frame, cursor='hand2')
+        empty_folder_canvas = tk.Canvas(master=center_frame, cursor='hand2', **self.root_style_canvas_params)
         empty_folder_canvas.pack(side=tk.TOP, anchor=tk.S, fill=tk.BOTH, expand=True)
 
-        empty_folder_label_font = Font(family='Helvetica', size=self.EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, weight='bold')
+        empty_folder_label_font = Font(size=self.EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, weight='bold')
 
         empty_folder_label = ttk.Label(
             master=center_frame,
@@ -260,13 +368,13 @@ class App:
         # frame.bind('<Configure>', self.on_home_page_frame_resize)
 
     def create_page_img(self):
-        frame = tk.Frame(master=self.container)
+        frame = ttk.Frame(master=self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
-        main_img_view_canvas = tk.Canvas(master=frame)
+        main_img_view_canvas = tk.Canvas(master=frame, **self.root_style_canvas_params)
         main_img_view_canvas.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
 
-        status_frame = tk.Frame(master=frame)
+        status_frame = ttk.Frame(master=frame)
         status_frame.pack(side=tk.BOTTOM, anchor=tk.S, fill=tk.X, padx=2, pady=2)
 
         current_img_dir_path = tk.StringVar(master=status_frame, value='[NIL]')
@@ -299,7 +407,7 @@ class App:
         self.page_wise_data['img']['main_frame'] = frame
 
     def create_page_img_error(self):
-        frame = tk.Frame(self.container)
+        frame = ttk.Frame(self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
         label = ttk.Label(frame, text='Could not show image.', background='red', foreground='#FFFFFF')
@@ -309,7 +417,7 @@ class App:
         self.page_wise_data['img_error']['main_frame'] = frame
 
     def create_page_dirs_files(self):
-        frame = tk.Frame(self.container)
+        frame = ttk.Frame(self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
         label = ttk.Label(frame, text="Welcome", background="red", foreground="white")
