@@ -23,38 +23,10 @@ class App:
     APP_IMAGES_PATH = os.path.join(APP_RESOURCES_PATH, 'images')
 
     APP_SUPPORTED_IMAGE_FILE_EXTENSIONS = [
-        'bmp',  # BMP
-        'dib',  # BMP
-        'eps',  # EPS
-        'gif',  # GIF
-        'icns',  # ICNS
-        'ico',  # ICO
-        'im',  # IM
-        'jpeg',  # JPEG
-        'jpe',  # JPEG
-        'jpg',  # JPEG
-        'msp',  # MSP
-        'pcx',  # PCX
-        'png',  # PNG
-        'ppm',  # PPM
-        'pgm',  # PPM
-        'pbm',  # PPM
-        'pnm',  # PPM
-        'sgi',  # SGI
-        'rgb',  # SGI
-        'bw',  # SGI
-        'spider',  # SPIDER
-        'tga',  # TGA
-        'tif',  # TIFF
-        'tiff',  # TIFF
-        'webp',  # WEBP
-        'xbm',  # XBM
-        'pdf',  # PDF
-        'psd',  # PSD
-        'fits',  # FITS
-        'fit',  # FITS
-        'pcd',  # PCD
-        'dds',  # DDS
+        'bmp', 'dib', 'eps', 'gif', 'icns', 'ico', 'im', 'jpeg', 'jpe', 'jpg',
+        'msp', 'pcx', 'png', 'ppm', 'pgm', 'pbm', 'pnm', 'sgi', 'rgb', 'bw',
+        'spider', 'tga', 'tif', 'tiff', 'webp', 'xbm', 'pdf', 'psd', 'fits',
+        'fit', 'pcd', 'dds'
     ]
 
     APP_PAGES = ['home', 'img', 'img_error', 'dirs_files']
@@ -96,9 +68,11 @@ class App:
                 'canvases': {},
                 'fonts': {},
                 'labels': {},
+                'buttons': {},
                 'images': {},
                 'photos': {},
-                'string_vars': {}
+                'string_vars': {},
+                'kwargs': {}
             }
 
         self.screen_width = self.root.winfo_screenwidth()
@@ -133,6 +107,8 @@ class App:
         self.root.bind('<Unmap>', self.on_minimize)
         self.root.bind('<Map>', self.on_restore)
         self.root.bind('<Configure>', self.on_configure)
+        self.root.bind('<Enter>', self.on_enter)
+        self.root.bind('<Leave>', self.on_leave)
 
         self.container.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
         self.container.grid_rowconfigure(0, weight=1)
@@ -508,7 +484,25 @@ class App:
         else:
             try:
                 self.show_current_img()
+
                 page_data = self.page_wise_data.get('img')
+                main_frame = page_data['main_frame']
+
+                left_arrow_image_path = os.path.join(self.APP_IMAGES_PATH, 'left-arrow.png')
+                right_arrow_image_path = os.path.join(self.APP_IMAGES_PATH, 'right-arrow.png')
+                left_arrow_image = Image.open(left_arrow_image_path)
+                right_arrow_image = Image.open(right_arrow_image_path)
+                left_arrow_photo = ImageTk.PhotoImage(left_arrow_image)
+                right_arrow_photo = ImageTk.PhotoImage(right_arrow_image)
+
+                left_button_kwargs = { 'relx': 0, 'rely': 0.5, 'anchor': tk.W, 'x': 10 }
+                right_button_kwargs = { 'relx': 1, 'rely': 0.5, 'anchor': tk.E, 'x': -10 }
+
+                left_button = ttk.Button(master=main_frame, image=left_arrow_photo, command=lambda: self.show_prev_img())
+                left_button.place(**left_button_kwargs)
+
+                right_button = ttk.Button(master=main_frame, image=right_arrow_photo, command=lambda: self.show_next_img())
+                right_button.place(**right_button_kwargs)
 
                 self.menu_items['file'].entryconfig('Close image', state=tk.ACTIVE)
                 self.menu_items['file'].entryconfig('Delete image', state=tk.ACTIVE)
@@ -521,6 +515,18 @@ class App:
 
                 page_data['string_vars']['current_img_dir_path'].set(current_image_dir_name)
                 page_data['string_vars']['current_img_idx'].set('1/?')
+
+                page_data['images']['left_arrow'] = left_arrow_image
+                page_data['images']['right_arrow'] = right_arrow_image
+
+                page_data['photos']['left_arrow'] = left_arrow_photo
+                page_data['photos']['right_arrow'] = right_arrow_photo
+
+                page_data['buttons']['left'] = left_button
+                page_data['buttons']['right'] = right_button
+
+                page_data['kwargs']['left_button'] = left_button_kwargs
+                page_data['kwargs']['right_button'] = right_button_kwargs
             except Exception as e:
                 print(e, file=sys.stderr)
                 self.show_page('img_error')
@@ -599,20 +605,54 @@ class App:
             if new_width <= 0 or new_height <= 0:
                 return
 
-            new_width = self.current_image_width if new_width >= self.current_image_width else new_width
-            new_height = self.current_image_height if new_height >= self.current_image_height else new_height
+            new_width = min(new_width, self.current_image_width)
+            new_height = min(new_height, self.current_image_height)
 
             resized_current_image = current_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
             resized_current_photo = ImageTk.PhotoImage(resized_current_image)
 
             main_img_view_canvas.delete('all')
 
-            center_x = main_img_view_canvas_width // 2
-            center_y = main_img_view_canvas_height // 2
-
-            main_img_view_canvas.create_image(center_x, center_y, image=resized_current_photo, anchor=tk.CENTER)
+            main_img_view_canvas.create_image(
+                main_img_view_canvas_width // 2,
+                main_img_view_canvas_height // 2,
+                anchor=tk.CENTER,
+                image=resized_current_photo
+            )
+            main_img_view_canvas.image = resized_current_photo
 
             page_data['photos']['current'] = resized_current_photo
+
+    def show_img_page_arrow_buttons(self, left=True, right=True):
+        page_data = self.page_wise_data.get('img')
+
+        try:
+            if left:
+                left_button = page_data['buttons']['left']
+                left_button_kwargs = page_data['kwargs']['left_button']
+                left_button.place(**left_button_kwargs)
+
+            if right:
+                right_button = page_data['buttons']['right']
+                right_button_kwargs = page_data['kwargs']['right_button']
+                right_button.place(**right_button_kwargs)
+
+        except Exception as e:
+            pass
+
+    def hide_img_page_arrow_buttons(self, left=True, right=True):
+        page_data = self.page_wise_data.get('img')
+
+        try:
+            if left:
+                left_button = page_data['buttons']['left']
+                left_button.place_forget()
+
+            if right:
+                right_button = page_data['buttons']['right']
+                right_button.place_forget()
+        except Exception as e:
+            pass
 
     def open_choose_img_files_dialog_and_show(self):
         selected_image_files = filedialog.askopenfilenames(
@@ -645,10 +685,10 @@ class App:
         )
         main_img_view_canvas.image = current_photo
 
-        if resizeframe:
-            self.current_image_width = current_image.width
-            self.current_image_height = current_image.height
+        self.current_image_width = current_image.width
+        self.current_image_height = current_image.height
 
+        if resizeframe:
             screen_width = self.screen_width * 0.9
             screen_height = self.screen_height * 0.8
 
@@ -704,6 +744,8 @@ class App:
             if self.current_image_file_idx < 0:
                 self.current_image_file_idx = len(self.current_image_file_paths) - 1
 
+            self.show_img_page_arrow_buttons(right=False)
+            self.set_timeout(self.hide_img_page_arrow_buttons, 'hide_img_page_arrow_buttons')
             self.show_idx_img()
 
     def show_next_img(self):
@@ -713,6 +755,8 @@ class App:
             if self.current_image_file_idx == len(self.current_image_file_paths):
                 self.current_image_file_idx = 0
 
+            self.show_img_page_arrow_buttons(left=False)
+            self.set_timeout(self.hide_img_page_arrow_buttons, 'hide_img_page_arrow_buttons')
             self.show_idx_img()
 
     def load_other_img_files(self):
@@ -774,6 +818,14 @@ class App:
                 self.app_width = event.width
                 self.app_height = event.height
                 self.on_resize_callback()
+
+    def on_enter(self, event):
+        if self.current_page == 'img':
+            self.show_img_page_arrow_buttons()
+
+    def on_leave(self, event):
+        if self.current_page == 'img':
+            self.hide_img_page_arrow_buttons()
 
     def on_resize_callback(self):
         if self.current_page == 'home':
