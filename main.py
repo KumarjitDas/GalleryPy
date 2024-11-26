@@ -75,6 +75,8 @@ class App:
                 'kwargs': {}
             }
 
+        self.is_initial_sizing_complete = False
+        self.is_initial_dims = True
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self.app_width = self.root.winfo_width()
@@ -318,7 +320,7 @@ class App:
         frame.grid(row=0, column=0, sticky=tk.NSEW)
 
         center_frame = ttk.Frame(master=frame, width=50, height=50)
-        center_frame.place(relx=0.5, rely=0.45, anchor=tk.CENTER)
+        center_frame.place(relx=0.5, rely=0.475, anchor=tk.CENTER)
 
         empty_folder_canvas = tk.Canvas(master=center_frame, cursor='hand2', **self.root_style_canvas_params)
         empty_folder_canvas.pack(side=tk.TOP, anchor=tk.S, fill=tk.BOTH, expand=True)
@@ -644,6 +646,17 @@ class App:
         page_data = self.page_wise_data.get('img')
 
         try:
+            cur_x, cur_y = self.root.winfo_pointerxy()
+            main_img_view_canvas = page_data['canvases']['main_img_view']
+
+            canvas_x1 = main_img_view_canvas.winfo_rootx()
+            canvas_y1 = main_img_view_canvas.winfo_rooty()
+            canvas_x2 = canvas_x1 + main_img_view_canvas.winfo_width()
+            canvas_y2 = canvas_y1 + main_img_view_canvas.winfo_height()
+
+            if canvas_x1 <= cur_x <= canvas_x2 and canvas_y1 <= cur_y <= canvas_y2:
+                return
+
             if left:
                 left_button = page_data['buttons']['left']
                 left_button.place_forget()
@@ -688,7 +701,7 @@ class App:
         self.current_image_width = current_image.width
         self.current_image_height = current_image.height
 
-        if resizeframe:
+        if resizeframe and self.is_initial_dims:
             screen_width = self.screen_width * 0.9
             screen_height = self.screen_height * 0.8
 
@@ -818,6 +831,16 @@ class App:
                 self.app_width = event.width
                 self.app_height = event.height
                 self.on_resize_callback()
+
+        if self.is_initial_sizing_complete:
+            if self.app_width != self.APP_WIDTH or self.app_height != self.APP_HEIGHT:
+                self.is_initial_dims = False
+        else:
+            self.set_timeout(
+                lambda: setattr(self, 'is_initial_sizing_complete', True),
+                'set_is_initial_sizing_complete',
+                750
+            )
 
     def on_enter(self, event):
         if self.current_page == 'img':
