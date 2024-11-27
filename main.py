@@ -1,12 +1,11 @@
 import argparse
 import os
-import platform
 import sys
 import tkinter as tk
-import traceback
 from tkinter import ttk
 from tkinter.font import Font
 from tkinter import filedialog
+
 from PIL import Image, ImageTk
 
 
@@ -75,12 +74,31 @@ class App:
                 'kwargs': {}
             }
 
-        self.is_initial_sizing_complete = False
-        self.is_initial_dims = True
+        self._is_initial_sizing_complete = False
+        self._is_initial_dims = True
+        self._is_resizing = False
+        self._is_restoring_after_fullscreen = False
+        self._is_fullscreen_after_maximized = False
+        self._is_restoring_after_fullscreen_in_img = False
+        self._is_first_menubar_resize_after_fullscreen = False
+        self._is_first_statusbar_resize_after_fullscreen = False
+
+        self.is_window_minimized = False
+        self.is_window_maximized = False
+        self.was_window_maximized_before = False
+        self.is_window_fullscreen = False
+
+        self.is_menubar_hidden = False
+        self.is_alt_key_menubar_hidden = False
+        self.is_alt_key_statusbar_hidden = False
+
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self.app_width = self.root.winfo_width()
         self.app_height = self.root.winfo_height()
+        self.app_geometry_before_maximize = self.root.winfo_geometry()
+        self.app_width_before_maximize = self.app_width
+        self.app_height_before_maximize = self.app_height
         self.current_image_width = 0
         self.current_image_height = 0
 
@@ -106,11 +124,16 @@ class App:
         self.root.geometry(self.APP_GEOMETRY)
         self.root.config(menu=self.menubar)
 
-        self.root.bind('<Unmap>', self.on_minimize)
-        self.root.bind('<Map>', self.on_restore)
-        self.root.bind('<Configure>', self.on_configure)
-        self.root.bind('<Enter>', self.on_enter)
-        self.root.bind('<Leave>', self.on_leave)
+        self.root.bind_all('<Unmap>', self.on_minimize)
+        self.root.bind_all('<Map>', self.on_restore)
+        self.root.bind_all('<Configure>', self.on_configure)
+        self.root.bind_all('<Enter>', self.on_enter)
+        self.root.bind_all('<Leave>', self.on_leave)
+
+        self.root.bind_all('<F11>', self.on_f11_keypress)
+        self.root.bind_all('<Escape>', self.on_esc_keypress)
+        self.root.bind_all('<Alt_L>', self.on_alt_keypress)
+        self.root.bind_all('<Alt_R>', self.on_alt_keypress)
 
         self.container.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
         self.container.grid_rowconfigure(0, weight=1)
@@ -298,6 +321,17 @@ class App:
         appearance_submenu.add_radiobutton(label='Dark', command=lambda: '')
         view_menu.add_cascade(label='Appearance', menu=appearance_submenu)
 
+        # The 'Window' submenu
+        window_submenu = tk.Menu(view_menu, tearoff=False)
+        window_submenu.add_command(label='Minimize', command=lambda: self.minimize_window())
+        window_submenu.add_command(label='Maximize', command=lambda: self.maximize_window())
+        window_submenu.add_command(label='Fullscreen', command=lambda: self.fullscreen_window())
+        window_submenu.add_command(label='Restore', state=tk.DISABLED, command=lambda: self.restore_window())
+        view_menu.add_cascade(label='Window', menu=window_submenu)
+        self.menu_items['view__window'] = window_submenu
+
+        view_menu.add_command(label='Slideshow', state=tk.DISABLED, command=lambda: '')
+
         # The 'Language' submenu
         language_submenu = tk.Menu(view_menu, tearoff=False)
         language_submenu.add_radiobutton(label='English', command=lambda: '')
@@ -401,6 +435,7 @@ class App:
         self.page_wise_data['img']['labels']['current_img_format'] = current_img_format_label
 
         self.page_wise_data['img']['canvases']['main_img_view'] = main_img_view_canvas
+        self.page_wise_data['img']['other_frames']['status'] = status_frame
         self.page_wise_data['img']['page_item_loader'] = self.load_page_img_items
         self.page_wise_data['img']['main_frame'] = frame
 
@@ -485,9 +520,15 @@ class App:
             self.show_page('img_error')
         else:
             try:
+                self._is_restoring_after_fullscreen_in_img = True
+                page_data = self.page_wise_data.get('img')
+
+                if self.is_window_fullscreen:
+                    self.hide_menubar()
+                    page_data['other_frames']['status'].grid_remove()
+
                 self.show_current_img()
 
-                page_data = self.page_wise_data.get('img')
                 main_frame = page_data['main_frame']
 
                 left_arrow_image_path = os.path.join(self.APP_IMAGES_PATH, 'left-arrow.png')
@@ -539,6 +580,28 @@ class App:
     def load_page_dirs_files_items(self):
         pass
 
+    def resize_menubar_items(self):
+        if self.is_window_maximized:
+            self.menu_items['view__window'].entryconfig('Maximize', state=tk.DISABLED)
+            self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
+            self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
+        elif self.is_window_fullscreen:
+            if self.current_page == 'img':
+                if not self._is_first_menubar_resize_after_fullscreen:
+                    self._is_first_menubar_resize_after_fullscreen = True
+                    self.hide_menubar()
+
+            self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
+            self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.DISABLED)
+            self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
+        else:
+            if self.current_page == 'img':
+                self.show_menubar()
+
+            self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
+            self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
+            self.menu_items['view__window'].entryconfig('Restore', state=tk.DISABLED)
+
     def resize_home_page_items(self):
         page_data = self.page_wise_data.get('home')
 
@@ -579,6 +642,15 @@ class App:
 
     def resize_img_page_items(self):
         page_data = self.page_wise_data.get('img')
+
+        if self.is_window_fullscreen:
+            if not self._is_first_statusbar_resize_after_fullscreen:
+                self._is_first_statusbar_resize_after_fullscreen = True
+                self.is_alt_key_statusbar_hidden = True
+                page_data['other_frames']['status'].grid_remove()
+        else:
+            self.is_alt_key_statusbar_hidden = False
+            page_data['other_frames']['status'].grid()
 
         current_image = page_data['images']['current']
         current_photo = page_data['photos']['current']
@@ -679,6 +751,22 @@ class App:
             self.set_timeout(self.load_other_img_files, 'load_other_img_files')
             self.show_page('img')
 
+    def hide_menubar(self):
+        if not self.is_menubar_hidden:
+            self.is_alt_key_menubar_hidden = True
+            self.root.config(menu='')
+            # self.root['menu'] = None
+
+        self.is_menubar_hidden = True
+
+    def show_menubar(self):
+        if self.is_menubar_hidden:
+            self.is_alt_key_menubar_hidden = False
+            # self.root['menu'] = self.menubar
+            self.root.config(menu=self.menubar)
+
+        self.is_menubar_hidden = False
+
     def show_current_img(self, resizeframe=True):
         page_data = self.page_wise_data.get('img')
 
@@ -701,7 +789,7 @@ class App:
         self.current_image_width = current_image.width
         self.current_image_height = current_image.height
 
-        if resizeframe and self.is_initial_dims:
+        if resizeframe and self._is_initial_dims:
             screen_width = self.screen_width * 0.9
             screen_height = self.screen_height * 0.8
 
@@ -815,29 +903,156 @@ class App:
 
         self.show_page('home')
 
+    def minimize_window(self):
+        self.root.state('iconic')  # Minimize the window
+
+    def maximize_window(self):
+        if self.is_window_fullscreen:
+            self._is_restoring_after_fullscreen = False
+            self._is_fullscreen_after_maximized = False
+            self.root.attributes('-fullscreen', False)
+
+        self.root.state('zoomed')  # Maximize the window
+
+    def fullscreen_window(self):
+        self.is_window_fullscreen = True
+        self.is_window_minimized = False
+        self.is_window_maximized = False
+        self._is_restoring_after_fullscreen = True
+        self._is_fullscreen_after_maximized = self.was_window_maximized_before
+
+        if self.was_window_maximized_before:
+            print('Was maximized before')
+
+        self.root.attributes('-fullscreen', True)
+        self.root.event_generate('<Configure>')
+
+    def restore_window(self):
+        if self.is_window_fullscreen:
+            self._is_restoring_after_fullscreen = False
+            self._is_first_menubar_resize_after_fullscreen = False
+            self._is_first_statusbar_resize_after_fullscreen = False
+            self.root.attributes('-fullscreen', False)
+
+            if self._is_fullscreen_after_maximized:
+                self.maximize_window()
+                return
+
+        self._is_restoring_after_fullscreen_in_img = False
+
+        self.root.state('normal')
+
+    def on_f11_keypress(self, event):
+        if self.is_window_fullscreen:
+            self.restore_window()
+        else:
+            self.fullscreen_window()
+
+    def on_esc_keypress(self, event):
+        if self.is_window_fullscreen:
+            self.restore_window()
+
+    def on_alt_keypress(self, event):
+        if self.is_window_fullscreen:
+            if self.current_page == 'home':
+                if self.is_alt_key_menubar_hidden:
+                    self.show_menubar()
+                return
+
+            if self.is_alt_key_menubar_hidden:
+                self.is_alt_key_menubar_hidden = False
+                self.show_menubar()
+            else:
+                self.is_alt_key_menubar_hidden = True
+                self.hide_menubar()
+
+            if self.current_page == 'img':
+                if self.is_alt_key_statusbar_hidden:
+                    self.is_alt_key_statusbar_hidden = False
+                    self.page_wise_data['img']['other_frames']['status'].grid()
+                else:
+                    self.is_alt_key_statusbar_hidden = True
+                    self.page_wise_data['img']['other_frames']['status'].grid_remove()
+
     def on_minimize(self, event):
         if self.root.state() == 'iconic':
-            pass
+            self.is_window_minimized = True
 
     def on_restore(self, event):
         if self.root.state() == 'normal':
+            if self.is_window_minimized:
+                return
+
+            if self._is_restoring_after_fullscreen:
+                self._is_restoring_after_fullscreen = False
+                return
+
+            if self._is_restoring_after_fullscreen_in_img:
+                return
+            else:
+                self._is_restoring_after_fullscreen_in_img = self.current_page == 'img'
+
+            if self.was_window_maximized_before:
+                pos_x, pos_y = self.get_window_pos()
+
+                self.root.geometry(
+                    str(self.app_width_before_maximize) +
+                    'x' +
+                    str(self.app_height_before_maximize) +
+                    f'+{pos_x}+{pos_y}'
+                )
+
+            self.is_window_minimized = False
+            self.was_window_maximized_before = self.is_window_maximized
+            self.is_window_maximized = False
+            self.is_window_fullscreen = False
             self.on_resize_callback()
 
     def on_configure(self, event):
+        if not ((self.app_width != event.width) or (self.app_height != event.height)):
+            return
+
+        self.app_width = event.width
+        self.app_height = event.height
+
         if self.root.state() == 'zoomed':
+            if self._is_resizing:
+                return
+
+            self._is_resizing = True
+
+            if self.is_window_fullscreen and not self._is_fullscreen_after_maximized:
+                self.is_window_fullscreen = False
+
+            self.was_window_maximized_before = self.is_window_maximized
+            self.is_window_maximized = not self.is_window_fullscreen
+            self.is_window_minimized = False
+
+            print('Fullscreen\n' if self.is_window_fullscreen else '', end='')
+            print('------------- after maximized ------------\n' if self._is_fullscreen_after_maximized else '', end='')
+            print('Maximized\n' if self.is_window_maximized else '', end='')
+
+            self.root.after(100, lambda: setattr(self, '_is_resizing', False))
             self.on_resize_callback()
         elif self.root.state() == 'normal':
-            if (self.app_width != event.width) or (self.app_height != event.height):
-                self.app_width = event.width
-                self.app_height = event.height
-                self.on_resize_callback()
+            if not self.is_window_minimized:
+                self.is_window_minimized = False
+                self.was_window_maximized_before = self.is_window_maximized
+                self.is_window_maximized = False
 
-        if self.is_initial_sizing_complete:
+                if not self.is_window_fullscreen:
+                    self.app_geometry_before_maximize = self.root.winfo_geometry()
+                    self.app_width_before_maximize = self.app_width
+                    self.app_height_before_maximize = self.app_height
+
+            self.on_resize_callback()
+
+        if self._is_initial_sizing_complete:
             if self.app_width != self.APP_WIDTH or self.app_height != self.APP_HEIGHT:
-                self.is_initial_dims = False
+                self._is_initial_dims = False
         else:
             self.set_timeout(
-                lambda: setattr(self, 'is_initial_sizing_complete', True),
+                lambda: setattr(self, '_is_initial_sizing_complete', True),
                 'set_is_initial_sizing_complete',
                 750
             )
@@ -851,6 +1066,8 @@ class App:
             self.hide_img_page_arrow_buttons()
 
     def on_resize_callback(self):
+        self.set_timeout(self.resize_menubar_items, 'resize_menubar_items')
+
         if self.current_page == 'home':
             self.set_timeout(self.resize_home_page_items, 'resize_home_page_items')
         elif self.current_page == 'img':
@@ -873,6 +1090,11 @@ class App:
                 func()
 
             self.root.after(ms, callback)
+
+    def get_window_pos(self):
+        _, position = self.app_geometry_before_maximize.split('+', 1)
+        x, y = map(int, position.split('+'))
+        return x, y
 
     @staticmethod
     def get_readable_file_size(file_path):
