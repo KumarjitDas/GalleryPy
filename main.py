@@ -2,11 +2,218 @@ import argparse
 import os
 import sys
 import tkinter as tk
+from queue import Queue
 from tkinter import ttk
 from tkinter.font import Font
 from tkinter import filedialog
+from typing import Callable, Any, Union
 
 from PIL import Image, ImageTk
+
+
+class TaskQueue:
+    """
+    A centralized queueing system for managing sequential execution of tasks.
+
+    Attributes:
+        root (tk.Tk): The root Tkinter window for managing the event loop.
+        task_queues (dict): A dictionary mapping task names to their respective queues.
+        running_tasks (dict): A dictionary tracking whether a task is currently running.
+
+    Methods:
+        enqueue_task(func_name, task):
+            Adds a task to the queue for the given function name and starts processing if idle.
+        process_queue(func_name):
+            Executes the next task in the queue for the given function name.
+        finish_task(func_name):
+            Marks the current task for the given function name as complete and processes the next task.
+
+    Decorators:
+        task():
+            A decorator to enqueue a function as a task. This ensures the function executes sequentially
+            and only after all previously enqueued tasks for the same function have completed.
+
+            Usage:
+                @task_queue.task()
+                def my_task():
+                    # Task logic here
+                    pass
+
+            Returns:
+                Callable: The wrapped function, which will automatically be added to the task queue when called.
+    """
+    def __init__(self, root: Union[None, tk.Tk]=None) -> None:
+        self.root: tk.Tk = root
+        self.task_queues: dict[str, Queue[Callable[..., Any]]] = {}  # Dictionary to store queues for each function
+        self.running_tasks: dict[str, bool] = {}  # Dictionary to track running states for each function
+
+    def set_root(self, root: tk.Tk) -> None:
+        self.root = root
+
+    def enqueue_task(self, func_name: str, task: Callable[..., Any]) -> None:
+        """Add a task to the queue for the given function."""
+        if func_name not in self.task_queues:
+            self.task_queues[func_name] = Queue()
+            self.running_tasks[func_name] = False
+
+        self.task_queues[func_name].put(task)
+        self.process_queue(func_name)
+
+    def process_queue(self, func_name: str) -> None:
+        """Process the queue for a given function."""
+        if not self.running_tasks[func_name] and not self.task_queues[func_name].empty():
+            self.running_tasks[func_name] = True
+
+            task: Callable[..., Any] = self.task_queues[func_name].get()
+            task()  # Execute the task
+
+            if self.root is None:
+                self.finish_task(func_name)
+                return
+
+            # noinspection PyTypeChecker
+            self.root.after(10, lambda: self.finish_task(func_name))
+
+    def finish_task(self, func_name: str) -> None:
+        """Mark the current task as complete and process the next one."""
+        self.running_tasks[func_name] = False
+        self.process_queue(func_name)
+
+    def task(self) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Decorator to enqueue tasks using the function's name."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            def wrapper(*args, **kwargs) -> None:
+                func_name: str = func.__name__
+                self.enqueue_task(func_name, lambda: func(*args, **kwargs))
+
+            return wrapper
+
+        return decorator
+
+
+class DependencyManager:
+    """
+    A centralized system for managing dependencies between functions.
+
+    Attributes:
+        dependency_states (dict): A dictionary tracking dependencies for follow-up functions.
+
+    Methods:
+        add_dependencies(follow_up_func, dependencies):
+            Registers a follow-up function with a list of dependent functions.
+        mark_complete(func_name):
+            Marks a dependent function as completed and triggers the follow-up function if all dependencies are satisfied.
+
+    Decorators:
+        dependency():
+            A decorator to mark a function as complete after it is executed. This ensures that
+            the function is registered as completed within the dependency tracking system.
+
+            Usage:
+                @dependency_manager.dependency()
+                def my_dependent_function():
+                    # Function logic here
+                    pass
+
+            Returns:
+                Callable: The wrapped function, which automatically registers itself as completed upon execution.
+    """
+    def __init__(self) -> None:
+        # Dictionary to track dependencies and their completion states
+        self.dependency_states: dict[Callable[..., Any], dict[str, set]] = {}
+
+    def add_dependencies(self, follow_up_func: Callable[..., Any], dependencies: Union[tuple[str, ...], list[str]]) -> None:
+        """Register dependencies for a follow-up function."""
+        self.dependency_states[follow_up_func] = {
+            'dependencies': set(dependencies),  # Functions that must complete
+            'completed': set()  # Functions that have completed
+        }
+
+    def mark_complete(self, func_name: str):
+        """Mark a dependent function as completed and check for follow-up execution."""
+        for follow_up_func, state in self.dependency_states.items():
+            if func_name in state['dependencies']:
+                state['completed'].add(func_name)
+
+                # If all dependencies are completed, execute the follow-up function
+                if state['dependencies'] == state['completed']:
+                    follow_up_func()
+
+                    # Clear the state to prevent repeated execution
+                    self.dependency_states[follow_up_func]['completed'].clear()
+
+    def dependency(self) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Decorator to mark functions as complete using the function's name."""
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            def wrapper(*args, **kwargs) -> None:
+                result: Any = func(*args, **kwargs)
+                func_name: str = func.__name__
+
+                self.mark_complete(func_name)
+                return result
+
+            return wrapper
+
+        return decorator
+
+
+class FiniteStateMachine:
+    """
+    A generic Finite State Machine (FSM) for managing states and transitions.
+
+    Attributes:
+        current_state (str): The current state of the FSM.
+        transitions (dict): A dictionary mapping states to their valid transitions.
+        state_actions (dict): A dictionary mapping states to their respective actions.
+
+    Methods:
+        add_state(state, transitions, action=None):
+            Adds a state to the FSM with its valid transitions and optional action.
+        set_state(state):
+            Sets the current state of the FSM if the state exists.
+        add_transition(from_state, to_state):
+            Adds a valid transition between two states.
+        change_state(new_state):
+            Changes the state if the transition is valid and executes the action for the new state.
+    """
+    def __init__(self, initial_state: Union[None, str]=None):
+        self.current_state: Union[None, str] = initial_state
+        self.transitions: dict = {}
+        self.state_actions: dict = {}
+
+    def add_state(self, state: str, transitions: Union[None, list[str]]=None, action: Callable[[str, str, ...], Any]=None):
+        """Adds a state to the FSM with valid transitions and an optional action."""
+        self.transitions[state] = transitions or []
+        self.state_actions[state] = action
+
+    def set_state(self, state: str):
+        """Sets the current state of the FSM."""
+        if state not in self.transitions:
+            raise ValueError(f"State '{state}' is not defined in the FSM.")
+
+        self.current_state = state
+
+    def add_transition(self, from_state: str, to_state: str):
+        """Adds a valid transition between two states."""
+        if from_state not in self.transitions:
+            raise ValueError(f"State '{from_state}' is not defined in the FSM.")
+
+        self.transitions[from_state].append(to_state)
+
+    def change_state(self, new_state: str):
+        """Changes the state if the transition is valid and executes the state's action."""
+        if new_state not in self.transitions.get(self.current_state, []):
+            print(f'Invalid transition: {self.current_state} → {new_state}')
+            return
+
+        print(f'Transitioning from {self.current_state} to {new_state}')
+
+        prev_state: str = self.current_state
+        self.current_state = new_state
+
+        # Execute the action for the new state
+        if action := self.state_actions.get(new_state):
+            action(new_state, prev_state)
 
 
 # noinspection PyTypedDict,PyCallingNonCallable,DuplicatedCode,PyTypeChecker
@@ -36,7 +243,11 @@ class App:
     EMPTY_FOLDER_LABEL_FONT_SIZE_MIN = 8
     EMPTY_FOLDER_LABEL_FONT_SIZE_MAX = 11
 
-    def __init__(self, arguments):
+    task_queue = TaskQueue()
+    dependency_manager = DependencyManager()
+    window_fsm = FiniteStateMachine()
+
+    def __init__(self, arguments: dict[str, Union[bool, None, str]]) -> None:
         if arguments is None:
             arguments = {
                 'image_file': None,
@@ -49,7 +260,7 @@ class App:
         self.cmd = arguments
         self.root = tk.Tk()
         self.root_style = ttk.Style()
-        self.root_style_canvas_params = {}
+        self.root_style_canvas_params: dict[str, Union[bool, int, float, None, str]] = {}
 
         self.menubar = tk.Menu(master=self.root)
         self.container = ttk.Frame(master=self.root)
@@ -111,6 +322,7 @@ class App:
         self.current_image_file_paths = []
 
     def init_app(self):
+        self.task_queue.set_root(self.root)
         self.set_min_width_height()
         self.apply_platform_themes_styles()
         self.root_style.theme_use('gallerypy_light')
@@ -462,7 +674,7 @@ class App:
         self.page_wise_data['dirs_files']['page_item_loader'] = self.load_page_dirs_files_items
         self.page_wise_data['dirs_files']['main_frame'] = frame
 
-    def show_page(self, page_name):
+    def show_page(self, page_name: str):
         page_data = self.page_wise_data.get(page_name)
 
         if page_data:
@@ -921,9 +1133,6 @@ class App:
         self._is_restoring_after_fullscreen = True
         self._is_fullscreen_after_maximized = self.was_window_maximized_before
 
-        if self.was_window_maximized_before:
-            print('Was maximized before')
-
         self.root.attributes('-fullscreen', True)
         self.root.event_generate('<Configure>')
 
@@ -974,10 +1183,12 @@ class App:
                     self.is_alt_key_statusbar_hidden = True
                     self.page_wise_data['img']['other_frames']['status'].grid_remove()
 
+    @task_queue.task()
     def on_minimize(self, event):
         if self.root.state() == 'iconic':
             self.is_window_minimized = True
 
+    @task_queue.task()
     def on_restore(self, event):
         if self.root.state() == 'normal':
             if self.is_window_minimized:
@@ -1008,6 +1219,7 @@ class App:
             self.is_window_fullscreen = False
             self.on_resize_callback()
 
+    @task_queue.task()
     def on_configure(self, event):
         if not ((self.app_width != event.width) or (self.app_height != event.height)):
             return
@@ -1027,10 +1239,6 @@ class App:
             self.was_window_maximized_before = self.is_window_maximized
             self.is_window_maximized = not self.is_window_fullscreen
             self.is_window_minimized = False
-
-            print('Fullscreen\n' if self.is_window_fullscreen else '', end='')
-            print('------------- after maximized ------------\n' if self._is_fullscreen_after_maximized else '', end='')
-            print('Maximized\n' if self.is_window_maximized else '', end='')
 
             self.root.after(100, lambda: setattr(self, '_is_resizing', False))
             self.on_resize_callback()
@@ -1057,10 +1265,12 @@ class App:
                 750
             )
 
+    @task_queue.task()
     def on_enter(self, event):
         if self.current_page == 'img':
             self.show_img_page_arrow_buttons()
 
+    @task_queue.task()
     def on_leave(self, event):
         if self.current_page == 'img':
             self.hide_img_page_arrow_buttons()
