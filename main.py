@@ -7,11 +7,39 @@ from tkinter import ttk
 from tkinter.font import Font
 from tkinter import filedialog
 from typing import Callable, Any, Union
-
 from PIL import Image, ImageTk
 
+APP_WIDTH = 640
+APP_HEIGHT = 400
+APP_NAME = 'GalleryPy'
+APP_GEOMETRY = str(APP_WIDTH) + 'x' + str(APP_HEIGHT)
 
-DEFAULT_TASK_DELAY_MS: int = 200
+APP_MIN_WIDTH = APP_WIDTH // 2
+
+APP_RESOURCES_PATH = os.path.abspath('resources/')
+APP_IMAGES_PATH = os.path.join(APP_RESOURCES_PATH, 'images')
+
+APP_READABLE_IMAGE_FILE_EXTENSIONS = [
+    'bmp', 'dib', 'eps', 'gif', 'icns', 'ico', 'im', 'jpeg', 'jpe', 'jpg',
+    'msp', 'pcx', 'png', 'ppm', 'pgm', 'pbm', 'pnm', 'sgi', 'rgb', 'bw',
+    'spider', 'tga', 'tif', 'tiff', 'webp', 'xbm', 'pdf', 'psd', 'fits',
+    'fit', 'pcd', 'dds'
+]
+
+APP_WRITABLE_IMAGE_FILE_EXTENSIONS = [
+    'bmp', 'dds', 'eps', 'gif', 'ico', 'im', 'jpeg', 'jpg', 'jp2', 'pcx',
+    'png', 'ppm', 'pgm', 'pbm', 'tiff', 'tif', 'webp', 'xbm', 'pdf'
+]
+
+APP_PAGES = ['home', 'img', 'img_error', 'dirs_files']
+
+EMPTY_FOLDER_IMAGE_SIZE_MIN = 60
+EMPTY_FOLDER_IMAGE_SIZE_MAX = 120
+
+EMPTY_FOLDER_LABEL_FONT_SIZE_MIN = 8
+EMPTY_FOLDER_LABEL_FONT_SIZE_MAX = 11
+
+DEFAULT_TASK_DELAY_MS: int = 100
 
 
 class TaskQueue:
@@ -271,35 +299,14 @@ class FiniteStateMachine:
 
 # noinspection PyTypedDict,PyCallingNonCallable,DuplicatedCode,PyTypeChecker
 class App:
-    APP_WIDTH = 640
-    APP_HEIGHT = 400
-    APP_NAME = 'GalleryPy'
-    APP_GEOMETRY = str(APP_WIDTH) + 'x' + str(APP_HEIGHT)
-
-    APP_MIN_WIDTH = APP_WIDTH // 2
-
-    APP_RESOURCES_PATH = os.path.abspath('resources/')
-    APP_IMAGES_PATH = os.path.join(APP_RESOURCES_PATH, 'images')
-
-    APP_SUPPORTED_IMAGE_FILE_EXTENSIONS = [
-        'bmp', 'dib', 'eps', 'gif', 'icns', 'ico', 'im', 'jpeg', 'jpe', 'jpg',
-        'msp', 'pcx', 'png', 'ppm', 'pgm', 'pbm', 'pnm', 'sgi', 'rgb', 'bw',
-        'spider', 'tga', 'tif', 'tiff', 'webp', 'xbm', 'pdf', 'psd', 'fits',
-        'fit', 'pcd', 'dds'
-    ]
-
-    APP_PAGES = ['home', 'img', 'img_error', 'dirs_files']
-
-    EMPTY_FOLDER_IMAGE_SIZE_MIN = 60
-    EMPTY_FOLDER_IMAGE_SIZE_MAX = 120
-
-    EMPTY_FOLDER_LABEL_FONT_SIZE_MIN = 8
-    EMPTY_FOLDER_LABEL_FONT_SIZE_MAX = 11
-
     task_queue = TaskQueue()
     dependency_manager = DependencyManager()
-    window_fsm = FiniteStateMachine(initial_state='restored')
-    page_fsm = FiniteStateMachine(initial_state='home')
+
+    window_fsm = FiniteStateMachine(initial_state='__init__')
+    page_fsm = FiniteStateMachine(initial_state='__init__')
+    cursor_fsm = FiniteStateMachine(initial_state='__init__')
+    menu_status_fsm = FiniteStateMachine(initial_state='__init__')
+    img_nav_fsm = FiniteStateMachine(initial_state='__init__')
 
     def __init__(self, arguments: dict[str, Union[bool, None, str]]) -> None:
         if arguments is None:
@@ -321,9 +328,8 @@ class App:
         self.windowing_system = self.root.tk.call('tk', 'windowingsystem')
         self.page_wise_data = {}
         self.menu_items = {}
-        self.current_page = None
 
-        for page_name in self.APP_PAGES:
+        for page_name in APP_PAGES:
             self.page_wise_data[page_name] = {
                 'main_frame': None,
                 'page_item_loader': None,
@@ -339,16 +345,31 @@ class App:
             }
 
         self.is_window_fullscreen = False
+        self.window_fsm.add_state('__init__', ['restored', 'resized', 'maximized', 'minimized', 'fullscreen'], self.on_normal_state)
         self.window_fsm.add_state('restored', ['resized', 'maximized', 'minimized', 'fullscreen'], self.on_normal_state)
         self.window_fsm.add_state('resized', ['restored', 'maximized', 'minimized', 'fullscreen'], self.on_normal_state)
         self.window_fsm.add_state('maximized', ['restored', 'fullscreen'], self.on_maximized_state)
         self.window_fsm.add_state('minimized', ['restored'], self.on_minimized_state)
         self.window_fsm.add_state('fullscreen', ['restored', 'maximized'], self.on_fullscreen_state)
 
-        self.window_fsm.add_state('home', ['img', 'img_error', 'dirs_files'])
-        self.window_fsm.add_state('img', ['home', 'img_error', 'dirs_files'])
-        self.window_fsm.add_state('img_error', ['home', 'img', 'dirs_files'])
-        self.window_fsm.add_state('dirs_files', ['home', 'img', 'img_error'])
+        self.page_fsm.add_state('__init__', ['home', 'img', 'img_error', 'dirs_files'])
+        self.page_fsm.add_state('home', ['img', 'img_error', 'dirs_files'], self.on_home_page_state)
+        self.page_fsm.add_state('img', ['home', 'img_error', 'dirs_files'], self.on_img_page_state)
+        self.page_fsm.add_state('img_error', ['home', 'img', 'dirs_files'], self.on_img_error_page_state)
+        self.page_fsm.add_state('dirs_files', ['home', 'img', 'img_error'], self.on_dirs_files_page_state)
+
+        self.cursor_fsm.add_state('__init__', ['enter', 'leave'])
+        self.cursor_fsm.add_state('enter', ['leave'], self.on_cursor_enter_state)
+        self.cursor_fsm.add_state('leave', ['enter'], self.on_cursor_leave_state)
+
+        self.menu_status_fsm.add_state('__init__', ['hidden', 'shown'])
+        self.menu_status_fsm.add_state('hidden', ['shown'], self.on_menu_status_hidden_state)
+        self.menu_status_fsm.add_state('shown', ['hidden'], self.on_menu_status_shown_state)
+
+        self.img_nav_fsm.add_state('__init__', ['all_in_dir', 'selected', 'single_zooming'])
+        self.img_nav_fsm.add_state('all_in_dir', ['single_zooming'])
+        self.img_nav_fsm.add_state('selected', ['all_in_dir', 'single_zooming'])
+        self.img_nav_fsm.add_state('single_zooming', ['all_in_dir', 'selected'])
 
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
@@ -360,7 +381,7 @@ class App:
         self.current_image_height = 0
 
         self.dialog_filetypes = (
-            ('Image Files', ' '.join([f'*.{ext}' for ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS])),
+            ('Image Files', ' '.join([f'*.{ext}' for ext in APP_READABLE_IMAGE_FILE_EXTENSIONS])),
         )
 
         self.current_image_file_idx = None
@@ -378,15 +399,15 @@ class App:
         self.create_page_img_error()
         self.create_page_dirs_files()
 
-        self.root.title(self.APP_NAME)
-        self.root.geometry(self.APP_GEOMETRY)
+        self.root.title(APP_NAME)
+        self.root.geometry(APP_GEOMETRY)
         self.root.config(menu=self.menubar)
 
         self.root.bind_all('<Unmap>', self.on_minimize_event_handler)
         self.root.bind_all('<Map>', self.on_restore_event_handler)
         self.root.bind_all('<Configure>', self.on_configure_event_handler)
-        self.root.bind_all('<Enter>', self.on_enter_event_handler)
-        self.root.bind_all('<Leave>', self.on_leave_event_handler)
+        self.root.bind_all('<Enter>', self.on_cursor_enter_event_handler)
+        self.root.bind_all('<Leave>', self.on_cursor_leave_event_handler)
 
         self.root.bind_all('<F11>', self.on_f11_keypress)
         self.root.bind_all('<Escape>', self.on_esc_keypress)
@@ -398,7 +419,7 @@ class App:
         self.container.grid_columnconfigure(0, weight=1)
 
     def set_min_width_height(self):
-        min_width = self.APP_MIN_WIDTH
+        min_width = APP_MIN_WIDTH
 
         if self.screen_width < min_width:
             min_width = self.screen_width
@@ -549,7 +570,7 @@ class App:
         # The 'Export' submenu
         export_submenu = tk.Menu(file_menu, tearoff=False)
 
-        for file_ext in self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS:
+        for file_ext in APP_WRITABLE_IMAGE_FILE_EXTENSIONS:
             export_submenu.add_command(label=file_ext, command=lambda: '')
 
         file_menu.add_cascade(label='Export', state=tk.DISABLED, menu=export_submenu)
@@ -617,7 +638,7 @@ class App:
         empty_folder_canvas = tk.Canvas(master=center_frame, cursor='hand2', **self.root_style_canvas_params)
         empty_folder_canvas.pack(side=tk.TOP, anchor=tk.S, fill=tk.BOTH, expand=True)
 
-        empty_folder_label_font = Font(size=self.EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, weight='bold')
+        empty_folder_label_font = Font(size=EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, weight='bold')
 
         empty_folder_label = ttk.Label(
             master=center_frame,
@@ -720,26 +741,11 @@ class App:
         self.page_wise_data['dirs_files']['page_item_loader'] = self.load_page_dirs_files_items
         self.page_wise_data['dirs_files']['main_frame'] = frame
 
-    def show_page(self, page_name: str):
-        self.page_fsm.change_state(page_name)
-        page_data = self.page_wise_data.get(page_name)
-
-        if page_data:
-            frame = page_data.get('main_frame')
-            page_item_loader = page_data.get('page_item_loader')
-
-            frame.tkraise()
-            page_item_loader()
-
-            self.current_page = page_name
-        else:
-            print(f"Page '{page_name}' does not exist.")
-
     def load_page_home_items(self):
         page_data = self.page_wise_data.get('home')
 
-        image_size = self.EMPTY_FOLDER_IMAGE_SIZE_MAX
-        empty_folder_image_path = os.path.join(self.APP_IMAGES_PATH, 'empty-folder.png')
+        image_size = EMPTY_FOLDER_IMAGE_SIZE_MAX
+        empty_folder_image_path = os.path.join(APP_IMAGES_PATH, 'empty-folder.png')
         empty_folder_image = Image.open(empty_folder_image_path).resize((image_size, image_size), Image.Resampling.LANCZOS)
         empty_folder_photo = ImageTk.PhotoImage(empty_folder_image)
 
@@ -763,7 +769,7 @@ class App:
         page_data['images']['empty_folder'] = empty_folder_image
         page_data['photos']['empty_folder'] = empty_folder_photo
 
-        self.root.title(self.APP_NAME)
+        self.root.title(APP_NAME)
 
         self.menu_items['file'].entryconfig('Close image', state=tk.DISABLED)
         self.menu_items['file'].entryconfig('Delete image', state=tk.DISABLED)
@@ -776,22 +782,14 @@ class App:
 
     def load_page_img_items(self):
         if self.current_image_file_path is None:
-            self.show_page('img_error')
+            self.page_fsm.change_state('img_error')
         else:
             try:
-                self._is_restoring_after_fullscreen_in_img = True
                 page_data = self.page_wise_data.get('img')
-
-                if self.is_window_fullscreen:
-                    self.hide_menubar()
-                    page_data['other_frames']['status'].grid_remove()
-
-                self.show_current_img()
-
                 main_frame = page_data['main_frame']
 
-                left_arrow_image_path = os.path.join(self.APP_IMAGES_PATH, 'left-arrow.png')
-                right_arrow_image_path = os.path.join(self.APP_IMAGES_PATH, 'right-arrow.png')
+                left_arrow_image_path = os.path.join(APP_IMAGES_PATH, 'left-arrow.png')
+                right_arrow_image_path = os.path.join(APP_IMAGES_PATH, 'right-arrow.png')
                 left_arrow_image = Image.open(left_arrow_image_path)
                 right_arrow_image = Image.open(right_arrow_image_path)
                 left_arrow_photo = ImageTk.PhotoImage(left_arrow_image)
@@ -818,6 +816,8 @@ class App:
                 page_data['string_vars']['current_img_dir_path'].set(current_image_dir_name)
                 page_data['string_vars']['current_img_idx'].set('1/?')
 
+                self.show_current_img()
+
                 page_data['images']['left_arrow'] = left_arrow_image
                 page_data['images']['right_arrow'] = right_arrow_image
 
@@ -831,7 +831,7 @@ class App:
                 page_data['kwargs']['right_button'] = right_button_kwargs
             except Exception as e:
                 print(e, file=sys.stderr)
-                self.show_page('img_error')
+                self.page_fsm.change_state('img_error')
 
     def load_page_img_error_items(self):
         pass
@@ -848,10 +848,17 @@ class App:
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.DISABLED)
             self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
+
+            if self.page_fsm.get_state() == 'img':
+                self.menu_status_fsm.change_state('hidden')
         else:
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Restore', state=tk.DISABLED)
+
+        if self.window_fsm.get_state() != 'fullscreen':
+            if self.page_fsm.get_state() == 'img':
+                self.menu_status_fsm.change_state('shown')
 
     def handle_home_page_items_on_resize(self):
         page_data = self.page_wise_data.get('home')
@@ -869,15 +876,16 @@ class App:
         root_height = self.root.winfo_height()
 
         desired_size = int(min(root_width, root_height) * 0.2)
-        desired_size = max(self.EMPTY_FOLDER_IMAGE_SIZE_MIN, min(desired_size, self.EMPTY_FOLDER_IMAGE_SIZE_MAX))
+        desired_size = max(EMPTY_FOLDER_IMAGE_SIZE_MIN, min(desired_size, EMPTY_FOLDER_IMAGE_SIZE_MAX))
 
         desired_font_size = int(min(root_width, root_height) * 0.02)
-        desired_font_size = max(self.EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, min(desired_font_size, self.EMPTY_FOLDER_LABEL_FONT_SIZE_MAX))
+        desired_font_size = max(EMPTY_FOLDER_LABEL_FONT_SIZE_MIN, min(desired_font_size, EMPTY_FOLDER_LABEL_FONT_SIZE_MAX))
 
         empty_folder_canvas.config(width=desired_size, height=desired_size)
         empty_folder_font.config(size=desired_font_size)
 
-        resized_image = empty_folder_image.resize((desired_size, desired_size), Image.Resampling.LANCZOS)
+        resized_image = empty_folder_image.copy()
+        resized_image.thumbnail((desired_size, desired_size), Image.Resampling.LANCZOS)
         empty_folder_photo = ImageTk.PhotoImage(resized_image)
 
         empty_folder_canvas.delete('all')
@@ -924,7 +932,9 @@ class App:
             new_width = min(new_width, self.current_image_width)
             new_height = min(new_height, self.current_image_height)
 
-            resized_current_image = current_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            resized_current_image = current_image.copy()
+            resized_current_image.thumbnail((new_width, new_height), Image.Resampling.LANCZOS)
+            # resized_current_image = current_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
             resized_current_photo = ImageTk.PhotoImage(resized_current_image)
 
             main_img_view_canvas.delete('all')
@@ -997,25 +1007,22 @@ class App:
         )
 
         if len(selected_image_files) > 0:
-            self.current_image_file_path = os.path.abspath(selected_image_files[0])
-            self.load_other_img_files()
-            self.show_page('img')
+            if len(selected_image_files) == 1:
+                self.current_image_file_path = os.path.abspath(selected_image_files[0])
+                self.load_other_img_files_of_current_dir()
+            else:
+                self.current_image_file_paths = selected_image_files
+                self.load_other_img_files()
+
+            self.page_fsm.change_state('img')
 
     def hide_menubar(self):
-        if not self.is_menubar_hidden:
-            self.is_alt_key_menubar_hidden = True
-            self.root.config(menu='')
-            # self.root['menu'] = None
-
-        self.is_menubar_hidden = True
+        self.root.config(menu='')
+        # self.root['menu'] = None
 
     def show_menubar(self):
-        if self.is_menubar_hidden:
-            self.is_alt_key_menubar_hidden = False
-            # self.root['menu'] = self.menubar
-            self.root.config(menu=self.menubar)
-
-        self.is_menubar_hidden = False
+        # self.root['menu'] = self.menubar
+        self.root.config(menu=self.menubar)
 
     def show_current_img(self, resizeframe=True):
         page_data = self.page_wise_data.get('img')
@@ -1026,7 +1033,7 @@ class App:
 
         current_image_file_base_name = os.path.basename(self.current_image_file_path)
         current_image_file_name = os.path.splitext(current_image_file_base_name)[0]
-        self.root.title(self.APP_NAME + ' - ' + current_image_file_name)
+        self.root.title(APP_NAME + ' - ' + current_image_file_name)
 
         main_img_view_canvas.create_image(
             main_img_view_canvas.winfo_width() // 2,
@@ -1060,9 +1067,9 @@ class App:
                     new_width = int(new_height * new_size_ratio)
 
                 self.root.geometry(
-                    str(new_width if new_width >= self.APP_WIDTH else self.APP_WIDTH) +
+                    str(new_width if new_width >= APP_WIDTH else APP_WIDTH) +
                     'x' +
-                    str(new_height if new_height >= self.APP_HEIGHT else self.APP_HEIGHT)
+                    str(new_height if new_height >= APP_HEIGHT else APP_HEIGHT)
                 )
 
         current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
@@ -1110,14 +1117,14 @@ class App:
             self.show_idx_img()
             self.hide_img_page_arrow_buttons()
 
-    def load_other_img_files(self):
+    def load_other_img_files_of_current_dir(self):
         page_data = self.page_wise_data.get('img')
         current_image_dir_name = os.path.dirname(self.current_image_file_path)
 
         if not os.path.isdir(current_image_dir_name):
             raise ValueError(f"The provided path '{current_image_dir_name}' is not a valid directory.")
 
-        file_extensions = tuple(self.APP_SUPPORTED_IMAGE_FILE_EXTENSIONS)
+        file_extensions = tuple(APP_READABLE_IMAGE_FILE_EXTENSIONS)
         file_paths = []
 
         for entry in os.scandir(current_image_dir_name):
@@ -1139,6 +1146,27 @@ class App:
         else:
             self.current_image_file_idx = None
 
+    def load_other_img_files(self):
+        page_data = self.page_wise_data.get('img')
+        current_image_dir_name = os.path.dirname(self.current_image_file_paths[0])
+
+        if not os.path.isdir(current_image_dir_name):
+            raise ValueError(f"The provided path '{current_image_dir_name}' is not a valid directory.")
+
+        self.current_image_file_path = self.current_image_file_paths[0]
+        current_image_file_idx = self.current_image_file_paths.index(self.current_image_file_path)
+
+        if current_image_file_idx >= 0:
+            self.current_image_file_idx = current_image_file_idx
+
+            page_data['string_vars']['current_img_idx'].set(
+                str(current_image_file_idx + 1) +
+                '/' +
+                str(len(self.current_image_file_paths))
+            )
+        else:
+            self.current_image_file_idx = None
+
     def close_current_img(self):
         page_data = self.page_wise_data.get('img')
 
@@ -1151,7 +1179,7 @@ class App:
         page_data['string_vars']['current_img_file_size'].set('0 B')
         page_data['string_vars']['current_img_format'].set('[NIL]')
 
-        self.show_page('home')
+        self.page_fsm.change_state('home')
 
     def minimize_window(self):
         self.root.attributes('-fullscreen', False)
@@ -1190,7 +1218,34 @@ class App:
     def on_alt_keypress(self, event):
         if self.window_fsm.get_state() == 'fullscreen':
             if self.page_fsm.get_state() == 'img':
-                pass
+                if self.menu_status_fsm.get_state() == 'shown':
+                    self.menu_status_fsm.change_state('hidden')
+                else:
+                    self.menu_status_fsm.change_state('shown')
+
+    def on_page_state(self, page_name: str, current_state: str, previous_state: str):
+        page_data = self.page_wise_data.get(page_name)
+
+        if page_data:
+            frame = page_data.get('main_frame')
+            page_item_loader = page_data.get('page_item_loader')
+
+            frame.tkraise()
+            page_item_loader()
+        else:
+            print(f"Page '{page_name}' does not exist.")
+
+    def on_home_page_state(self, current_state: str, previous_state: str):
+        self.on_page_state('home', current_state, previous_state)
+
+    def on_img_page_state(self, current_state: str, previous_state: str):
+        self.on_page_state('img', current_state, previous_state)
+
+    def on_img_error_page_state(self, current_state: str, previous_state: str):
+        self.on_page_state('img_error', current_state, previous_state)
+
+    def on_dirs_files_page_state(self, current_state: str, previous_state: str):
+        self.on_page_state('dirs_files', current_state, previous_state)
 
     def on_normal_state(self, current_state: str, previous_state: str):
         self.handle_all_items_on_resize()
@@ -1205,6 +1260,26 @@ class App:
     def on_fullscreen_state(self, current_state: str, previous_state: str):
         self.handle_all_items_on_resize()
         self.root.after(DEFAULT_TASK_DELAY_MS + 100, self.handle_all_items_on_resize)
+
+    def on_cursor_enter_state(self, current_state: str, previous_state: str):
+        if self.page_fsm.get_state() == 'img':
+            self.show_img_page_arrow_buttons()
+
+    def on_cursor_leave_state(self, current_state: str, previous_state: str):
+        if self.page_fsm.get_state() == 'img':
+            self.hide_img_page_arrow_buttons()
+
+    def on_menu_status_hidden_state(self, current_state: str, previous_state: str):
+        self.hide_menubar()
+
+        if self.page_fsm.get_state() == 'img':
+            self.page_wise_data['img']['other_frames']['status'].grid_remove()
+
+    def on_menu_status_shown_state(self, current_state: str, previous_state: str):
+        self.show_menubar()
+
+        if self.page_fsm.get_state() == 'img':
+            self.page_wise_data['img']['other_frames']['status'].grid()
 
     @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
     def on_minimize_event_handler(self, event):
@@ -1248,21 +1323,19 @@ class App:
         self.window_fsm.change_state('fullscreen')
 
     @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
-    def on_enter_event_handler(self, event):
-        if self.current_page == 'img':
-            self.show_img_page_arrow_buttons()
+    def on_cursor_enter_event_handler(self, event):
+        self.cursor_fsm.change_state('enter')
 
     @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
-    def on_leave_event_handler(self, event):
-        if self.current_page == 'img':
-            self.hide_img_page_arrow_buttons()
+    def on_cursor_leave_event_handler(self, event):
+        self.cursor_fsm.change_state('leave')
 
     def on_home_page_click(self, event):
         self.open_choose_img_files_dialog_and_show()
 
     def run(self):
         self.init_app()
-        self.show_page('home')
+        self.page_fsm.change_state('home')
         self.root.mainloop()
 
     def get_window_pos(self, geometry: Union[None, str]=None):
