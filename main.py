@@ -11,30 +11,38 @@ from typing import Callable, Any, Union
 from PIL import Image, ImageTk
 
 
+DEFAULT_TASK_DELAY_MS: int = 200
+
+
 class TaskQueue:
     """
-    A centralized queueing system for managing sequential execution of tasks.
+    A centralized queueing system for managing sequential execution of tasks with support for debouncing.
 
     Attributes:
         root (tk.Tk): The root Tkinter window for managing the event loop.
         task_queues (dict): A dictionary mapping task names to their respective queues.
         running_tasks (dict): A dictionary tracking whether a task is currently running.
+        debounce_tasks (dict): A dictionary tracking the last scheduled task for each function.
 
     Methods:
-        enqueue_task(func_name, task):
-            Adds a task to the queue for the given function name and starts processing if idle.
+        set_root(root):
+            Sets the Tkinter root window for managing delays and callbacks.
+        enqueue_task(func_name, task, debounce=False, delay=50):
+            Adds a task to the queue for the given function name, with optional debouncing.
         process_queue(func_name):
             Executes the next task in the queue for the given function name.
         finish_task(func_name):
             Marks the current task for the given function name as complete and processes the next task.
+        task(debounce=False, delay=50):
+            A decorator to enqueue a function as a task, with optional debouncing.
 
     Decorators:
         task():
-            A decorator to enqueue a function as a task. This ensures the function executes sequentially
-            and only after all previously enqueued tasks for the same function have completed.
+            A decorator to enqueue a function as a task with optional debouncing. This ensures the function
+            executes sequentially or as the last task in a burst of rapid calls.
 
             Usage:
-                @task_queue.task()
+                @task_queue.task(debounce=True, delay=100)
                 def my_task():
                     # Task logic here
                     pass
@@ -42,16 +50,42 @@ class TaskQueue:
             Returns:
                 Callable: The wrapped function, which will automatically be added to the task queue when called.
     """
+
     def __init__(self, root: Union[None, tk.Tk]=None) -> None:
-        self.root: tk.Tk = root
-        self.task_queues: dict[str, Queue[Callable[..., Any]]] = {}  # Dictionary to store queues for each function
-        self.running_tasks: dict[str, bool] = {}  # Dictionary to track running states for each function
+        self.root: Union[None, tk.Tk] = root
+        self.task_queues: dict[str, Queue[Callable[..., Any]]] = {}  # Task queues for each function
+        self.running_tasks: dict[str, bool] = {}  # Track running states for each function
+        self.debounce_tasks: dict[str, Union[None, str]] = {}  # Track last scheduled task IDs for debouncing
 
     def set_root(self, root: tk.Tk) -> None:
+        """Set the Tkinter root window."""
         self.root = root
 
-    def enqueue_task(self, func_name: str, task: Callable[..., Any]) -> None:
-        """Add a task to the queue for the given function."""
+    def enqueue_task(
+            self, func_name: str, task: Callable[..., Any], debounce: bool=False, delay: int=50
+    ) -> None:
+        """
+        Add a task to the queue for the given function with optional debouncing.
+
+        Args:
+            func_name (str): The name of the function being queued.
+            task (Callable[..., Any]): The task to be executed.
+            debounce (bool): Whether to enable debouncing for this task.
+            delay (int): Delay in milliseconds for debounced tasks.
+        """
+        if debounce:
+            # Cancel the last scheduled task if it exists
+            if func_name in self.debounce_tasks and self.debounce_tasks[func_name] is not None:
+                self.root.after_cancel(self.debounce_tasks[func_name])
+
+            # Schedule the new task
+            # noinspection PyTypeChecker
+            self.debounce_tasks[func_name] = self.root.after(delay, lambda: self._add_task_to_queue(func_name, task))
+        else:
+            self._add_task_to_queue(func_name, task)
+
+    def _add_task_to_queue(self, func_name: str, task: Callable[..., Any]) -> None:
+        """Internal method to add a task to the queue."""
         if func_name not in self.task_queues:
             self.task_queues[func_name] = Queue()
             self.running_tasks[func_name] = False
@@ -79,12 +113,21 @@ class TaskQueue:
         self.running_tasks[func_name] = False
         self.process_queue(func_name)
 
-    def task(self) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Decorator to enqueue tasks using the function's name."""
+    def task(self, debounce: bool = False, delay: int = 50) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """
+        Decorator to enqueue tasks using the function's name, with optional debouncing.
+
+        Args:
+            debounce (bool): Whether to enable debouncing for the task.
+            delay (int): Delay in milliseconds for debounced tasks.
+
+        Returns:
+            Callable: The wrapped function.
+        """
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
             def wrapper(*args, **kwargs) -> None:
                 func_name: str = func.__name__
-                self.enqueue_task(func_name, lambda: func(*args, **kwargs))
+                self.enqueue_task(func_name, lambda: func(*args, **kwargs), debounce=debounce, delay=delay)
 
             return wrapper
 
@@ -178,8 +221,17 @@ class FiniteStateMachine:
     """
     def __init__(self, initial_state: Union[None, str]=None):
         self.current_state: Union[None, str] = initial_state
+        self.previous_state: Union[None, str] = None
         self.transitions: dict = {}
         self.state_actions: dict = {}
+
+    def get_state(self):
+        """Returns the current state of the FSM."""
+        return self.current_state
+
+    def get_previous_state(self):
+        """Returns the previous state of the FSM."""
+        return self.previous_state
 
     def add_state(self, state: str, transitions: Union[None, list[str]]=None, action: Callable[[str, str, ...], Any]=None):
         """Adds a state to the FSM with valid transitions and an optional action."""
@@ -206,10 +258,11 @@ class FiniteStateMachine:
             print(f'Invalid transition: {self.current_state} → {new_state}')
             return
 
-        print(f'Transitioning from {self.current_state} to {new_state}')
+        print(f'Transition: {self.current_state} → {new_state}')
 
         prev_state: str = self.current_state
         self.current_state = new_state
+        self.previous_state = prev_state
 
         # Execute the action for the new state
         if action := self.state_actions.get(new_state):
@@ -245,7 +298,8 @@ class App:
 
     task_queue = TaskQueue()
     dependency_manager = DependencyManager()
-    window_fsm = FiniteStateMachine()
+    window_fsm = FiniteStateMachine(initial_state='restored')
+    page_fsm = FiniteStateMachine(initial_state='home')
 
     def __init__(self, arguments: dict[str, Union[bool, None, str]]) -> None:
         if arguments is None:
@@ -268,7 +322,6 @@ class App:
         self.page_wise_data = {}
         self.menu_items = {}
         self.current_page = None
-        self.timeout_callbacks = {}
 
         for page_name in self.APP_PAGES:
             self.page_wise_data[page_name] = {
@@ -285,31 +338,24 @@ class App:
                 'kwargs': {}
             }
 
-        self._is_initial_sizing_complete = False
-        self._is_initial_dims = True
-        self._is_resizing = False
-        self._is_restoring_after_fullscreen = False
-        self._is_fullscreen_after_maximized = False
-        self._is_restoring_after_fullscreen_in_img = False
-        self._is_first_menubar_resize_after_fullscreen = False
-        self._is_first_statusbar_resize_after_fullscreen = False
-
-        self.is_window_minimized = False
-        self.is_window_maximized = False
-        self.was_window_maximized_before = False
         self.is_window_fullscreen = False
+        self.window_fsm.add_state('restored', ['resized', 'maximized', 'minimized', 'fullscreen'], self.on_normal_state)
+        self.window_fsm.add_state('resized', ['restored', 'maximized', 'minimized', 'fullscreen'], self.on_normal_state)
+        self.window_fsm.add_state('maximized', ['restored', 'fullscreen'], self.on_maximized_state)
+        self.window_fsm.add_state('minimized', ['restored'], self.on_minimized_state)
+        self.window_fsm.add_state('fullscreen', ['restored', 'maximized'], self.on_fullscreen_state)
 
-        self.is_menubar_hidden = False
-        self.is_alt_key_menubar_hidden = False
-        self.is_alt_key_statusbar_hidden = False
+        self.window_fsm.add_state('home', ['img', 'img_error', 'dirs_files'])
+        self.window_fsm.add_state('img', ['home', 'img_error', 'dirs_files'])
+        self.window_fsm.add_state('img_error', ['home', 'img', 'dirs_files'])
+        self.window_fsm.add_state('dirs_files', ['home', 'img', 'img_error'])
 
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
         self.app_width = self.root.winfo_width()
         self.app_height = self.root.winfo_height()
-        self.app_geometry_before_maximize = self.root.winfo_geometry()
-        self.app_width_before_maximize = self.app_width
-        self.app_height_before_maximize = self.app_height
+        self.app_geometry_before_maximized = self.root.winfo_geometry()
+
         self.current_image_width = 0
         self.current_image_height = 0
 
@@ -336,11 +382,11 @@ class App:
         self.root.geometry(self.APP_GEOMETRY)
         self.root.config(menu=self.menubar)
 
-        self.root.bind_all('<Unmap>', self.on_minimize)
-        self.root.bind_all('<Map>', self.on_restore)
-        self.root.bind_all('<Configure>', self.on_configure)
-        self.root.bind_all('<Enter>', self.on_enter)
-        self.root.bind_all('<Leave>', self.on_leave)
+        self.root.bind_all('<Unmap>', self.on_minimize_event_handler)
+        self.root.bind_all('<Map>', self.on_restore_event_handler)
+        self.root.bind_all('<Configure>', self.on_configure_event_handler)
+        self.root.bind_all('<Enter>', self.on_enter_event_handler)
+        self.root.bind_all('<Leave>', self.on_leave_event_handler)
 
         self.root.bind_all('<F11>', self.on_f11_keypress)
         self.root.bind_all('<Escape>', self.on_esc_keypress)
@@ -575,7 +621,7 @@ class App:
 
         empty_folder_label = ttk.Label(
             master=center_frame,
-            text="No image file/directory have been chosen.\nOpen file  Ctrl + O",
+            text="No image file(s)/directory have been chosen.\nOpen file(s)  Ctrl + O",
             anchor=tk.CENTER,
             justify=tk.CENTER,
             # wraplength=240,
@@ -675,6 +721,7 @@ class App:
         self.page_wise_data['dirs_files']['main_frame'] = frame
 
     def show_page(self, page_name: str):
+        self.page_fsm.change_state(page_name)
         page_data = self.page_wise_data.get(page_name)
 
         if page_data:
@@ -725,7 +772,7 @@ class App:
         self.menu_items['edit'].entryconfig('Copy path', state=tk.DISABLED)
         self.menu_items['edit'].entryconfig('Resize image', state=tk.DISABLED)
 
-        self.resize_home_page_items()
+        self.handle_home_page_items_on_resize()
 
     def load_page_img_items(self):
         if self.current_image_file_path is None:
@@ -792,29 +839,21 @@ class App:
     def load_page_dirs_files_items(self):
         pass
 
-    def resize_menubar_items(self):
-        if self.is_window_maximized:
+    def handle_menubar_items_on_resize(self):
+        if self.window_fsm.get_state() == 'maximized':
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.DISABLED)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
-        elif self.is_window_fullscreen:
-            if self.current_page == 'img':
-                if not self._is_first_menubar_resize_after_fullscreen:
-                    self._is_first_menubar_resize_after_fullscreen = True
-                    self.hide_menubar()
-
+        elif self.window_fsm.get_state() == 'fullscreen':
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.DISABLED)
             self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
         else:
-            if self.current_page == 'img':
-                self.show_menubar()
-
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Restore', state=tk.DISABLED)
 
-    def resize_home_page_items(self):
+    def handle_home_page_items_on_resize(self):
         page_data = self.page_wise_data.get('home')
 
         empty_folder_image = page_data['images']['empty_folder']
@@ -852,17 +891,8 @@ class App:
 
         page_data['photos']['empty_folder'] = empty_folder_photo
 
-    def resize_img_page_items(self):
+    def handle_img_page_items_on_resize(self):
         page_data = self.page_wise_data.get('img')
-
-        if self.is_window_fullscreen:
-            if not self._is_first_statusbar_resize_after_fullscreen:
-                self._is_first_statusbar_resize_after_fullscreen = True
-                self.is_alt_key_statusbar_hidden = True
-                page_data['other_frames']['status'].grid_remove()
-        else:
-            self.is_alt_key_statusbar_hidden = False
-            page_data['other_frames']['status'].grid()
 
         current_image = page_data['images']['current']
         current_photo = page_data['photos']['current']
@@ -908,6 +938,14 @@ class App:
             main_img_view_canvas.image = resized_current_photo
 
             page_data['photos']['current'] = resized_current_photo
+
+    def handle_all_items_on_resize(self):
+        self.handle_menubar_items_on_resize()
+
+        if self.page_fsm.get_state() == 'home':
+            self.handle_home_page_items_on_resize()
+        elif self.page_fsm.get_state() == 'img':
+            self.handle_img_page_items_on_resize()
 
     def show_img_page_arrow_buttons(self, left=True, right=True):
         page_data = self.page_wise_data.get('img')
@@ -960,7 +998,7 @@ class App:
 
         if len(selected_image_files) > 0:
             self.current_image_file_path = os.path.abspath(selected_image_files[0])
-            self.set_timeout(self.load_other_img_files, 'load_other_img_files')
+            self.load_other_img_files()
             self.show_page('img')
 
     def hide_menubar(self):
@@ -1001,7 +1039,7 @@ class App:
         self.current_image_width = current_image.width
         self.current_image_height = current_image.height
 
-        if resizeframe and self._is_initial_dims:
+        if resizeframe:  # and self._is_initial_dims:
             screen_width = self.screen_width * 0.9
             screen_height = self.screen_height * 0.8
 
@@ -1044,7 +1082,7 @@ class App:
         page_data['photos']['current'] = current_photo
 
         page_data['main_frame'].focus_set()
-        self.resize_img_page_items()
+        self.handle_img_page_items_on_resize()
 
     def show_idx_img(self):
         self.current_image_file_path = self.current_image_file_paths[self.current_image_file_idx]
@@ -1058,8 +1096,8 @@ class App:
                 self.current_image_file_idx = len(self.current_image_file_paths) - 1
 
             self.show_img_page_arrow_buttons(right=False)
-            self.set_timeout(self.hide_img_page_arrow_buttons, 'hide_img_page_arrow_buttons')
             self.show_idx_img()
+            self.hide_img_page_arrow_buttons()
 
     def show_next_img(self):
         if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
@@ -1069,8 +1107,8 @@ class App:
                 self.current_image_file_idx = 0
 
             self.show_img_page_arrow_buttons(left=False)
-            self.set_timeout(self.hide_img_page_arrow_buttons, 'hide_img_page_arrow_buttons')
             self.show_idx_img()
+            self.hide_img_page_arrow_buttons()
 
     def load_other_img_files(self):
         page_data = self.page_wise_data.get('img')
@@ -1116,172 +1154,108 @@ class App:
         self.show_page('home')
 
     def minimize_window(self):
+        self.root.attributes('-fullscreen', False)
+        self.is_window_fullscreen = False
         self.root.state('iconic')  # Minimize the window
 
     def maximize_window(self):
-        if self.is_window_fullscreen:
-            self._is_restoring_after_fullscreen = False
-            self._is_fullscreen_after_maximized = False
-            self.root.attributes('-fullscreen', False)
-
+        self.root.attributes('-fullscreen', False)
+        self.is_window_fullscreen = False
         self.root.state('zoomed')  # Maximize the window
 
     def fullscreen_window(self):
+        self.root.attributes('-fullscreen', True)  # Make the window fullscreen
         self.is_window_fullscreen = True
-        self.is_window_minimized = False
-        self.is_window_maximized = False
-        self._is_restoring_after_fullscreen = True
-        self._is_fullscreen_after_maximized = self.was_window_maximized_before
-
-        self.root.attributes('-fullscreen', True)
-        self.root.event_generate('<Configure>')
+        self.on_fullscreen_event_handler(None)
 
     def restore_window(self):
-        if self.is_window_fullscreen:
-            self._is_restoring_after_fullscreen = False
-            self._is_first_menubar_resize_after_fullscreen = False
-            self._is_first_statusbar_resize_after_fullscreen = False
-            self.root.attributes('-fullscreen', False)
+        self.root.attributes('-fullscreen', False)
+        self.is_window_fullscreen = False
 
-            if self._is_fullscreen_after_maximized:
-                self.maximize_window()
-                return
-
-        self._is_restoring_after_fullscreen_in_img = False
-
-        self.root.state('normal')
+        if self.window_fsm.get_previous_state() == 'maximized':
+            self.root.state('zoomed')  # Maximize the window
+        else:
+            self.root.state('normal')  # Restore the window
 
     def on_f11_keypress(self, event):
-        if self.is_window_fullscreen:
+        if self.window_fsm.get_state() == 'fullscreen':
             self.restore_window()
         else:
             self.fullscreen_window()
 
     def on_esc_keypress(self, event):
-        if self.is_window_fullscreen:
+        if self.window_fsm.get_state() == 'fullscreen':
             self.restore_window()
 
     def on_alt_keypress(self, event):
-        if self.is_window_fullscreen:
-            if self.current_page == 'home':
-                if self.is_alt_key_menubar_hidden:
-                    self.show_menubar()
-                return
+        if self.window_fsm.get_state() == 'fullscreen':
+            if self.page_fsm.get_state() == 'img':
+                pass
 
-            if self.is_alt_key_menubar_hidden:
-                self.is_alt_key_menubar_hidden = False
-                self.show_menubar()
-            else:
-                self.is_alt_key_menubar_hidden = True
-                self.hide_menubar()
+    def on_normal_state(self, current_state: str, previous_state: str):
+        self.handle_all_items_on_resize()
 
-            if self.current_page == 'img':
-                if self.is_alt_key_statusbar_hidden:
-                    self.is_alt_key_statusbar_hidden = False
-                    self.page_wise_data['img']['other_frames']['status'].grid()
-                else:
-                    self.is_alt_key_statusbar_hidden = True
-                    self.page_wise_data['img']['other_frames']['status'].grid_remove()
+    def on_maximized_state(self, current_state: str, previous_state: str):
+        self.handle_all_items_on_resize()
+        self.root.after(DEFAULT_TASK_DELAY_MS + 100, self.handle_all_items_on_resize)
 
-    @task_queue.task()
-    def on_minimize(self, event):
+    def on_minimized_state(self, current_state: str, previous_state: str):
+        pass
+
+    def on_fullscreen_state(self, current_state: str, previous_state: str):
+        self.handle_all_items_on_resize()
+        self.root.after(DEFAULT_TASK_DELAY_MS + 100, self.handle_all_items_on_resize)
+
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_minimize_event_handler(self, event):
         if self.root.state() == 'iconic':
-            self.is_window_minimized = True
+            self.window_fsm.change_state('minimized')
 
-    @task_queue.task()
-    def on_restore(self, event):
-        if self.root.state() == 'normal':
-            if self.is_window_minimized:
-                return
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_restore_event_handler(self, event):
+        if self.root.state() == 'normal' and not self.is_window_fullscreen:
+            if self.window_fsm.get_state() == 'maximized' and self.window_fsm.get_previous_state() == 'fullscreen':
+                pos_x, pos_y = self.get_window_pos(self.app_geometry_before_maximized)
+                self.root.geometry(f'{str(self.app_width)}x{str(self.app_height)}+{str(pos_x)}+{str(pos_y)}')
 
-            if self._is_restoring_after_fullscreen:
-                self._is_restoring_after_fullscreen = False
-                return
+            self.window_fsm.change_state('restored')
 
-            if self._is_restoring_after_fullscreen_in_img:
-                return
-            else:
-                self._is_restoring_after_fullscreen_in_img = self.current_page == 'img'
+    def on_configure_event_handler(self, event):
+        if ((self.window_fsm.get_state() == 'restored' or self.window_fsm.get_state() == 'resized') and
+                self.root.state() != 'zoomed'):
+            self.app_geometry_before_maximized = self.root.winfo_geometry()
 
-            if self.was_window_maximized_before:
-                pos_x, pos_y = self.get_window_pos()
-
-                self.root.geometry(
-                    str(self.app_width_before_maximize) +
-                    'x' +
-                    str(self.app_height_before_maximize) +
-                    f'+{pos_x}+{pos_y}'
-                )
-
-            self.is_window_minimized = False
-            self.was_window_maximized_before = self.is_window_maximized
-            self.is_window_maximized = False
-            self.is_window_fullscreen = False
-            self.on_resize_callback()
-
-    @task_queue.task()
-    def on_configure(self, event):
         if not ((self.app_width != event.width) or (self.app_height != event.height)):
             return
 
-        self.app_width = event.width
-        self.app_height = event.height
-
         if self.root.state() == 'zoomed':
-            if self._is_resizing:
-                return
-
-            self._is_resizing = True
-
-            if self.is_window_fullscreen and not self._is_fullscreen_after_maximized:
-                self.is_window_fullscreen = False
-
-            self.was_window_maximized_before = self.is_window_maximized
-            self.is_window_maximized = not self.is_window_fullscreen
-            self.is_window_minimized = False
-
-            self.root.after(100, lambda: setattr(self, '_is_resizing', False))
-            self.on_resize_callback()
+            if self.window_fsm.get_state() != 'maximized' and not self.is_window_fullscreen:
+                self.on_maximize_event_handler(event)
         elif self.root.state() == 'normal':
-            if not self.is_window_minimized:
-                self.is_window_minimized = False
-                self.was_window_maximized_before = self.is_window_maximized
-                self.is_window_maximized = False
+            if self.window_fsm.get_state() == 'restored':
+                self.app_width = event.width
+                self.app_height = event.height
+                self.window_fsm.change_state('resized')
+            else:
+                self.on_restore_event_handler(event)
 
-                if not self.is_window_fullscreen:
-                    self.app_geometry_before_maximize = self.root.winfo_geometry()
-                    self.app_width_before_maximize = self.app_width
-                    self.app_height_before_maximize = self.app_height
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_maximize_event_handler(self, event):
+        self.window_fsm.change_state('maximized')
 
-            self.on_resize_callback()
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_fullscreen_event_handler(self, event):
+        self.window_fsm.change_state('fullscreen')
 
-        if self._is_initial_sizing_complete:
-            if self.app_width != self.APP_WIDTH or self.app_height != self.APP_HEIGHT:
-                self._is_initial_dims = False
-        else:
-            self.set_timeout(
-                lambda: setattr(self, '_is_initial_sizing_complete', True),
-                'set_is_initial_sizing_complete',
-                750
-            )
-
-    @task_queue.task()
-    def on_enter(self, event):
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_enter_event_handler(self, event):
         if self.current_page == 'img':
             self.show_img_page_arrow_buttons()
 
-    @task_queue.task()
-    def on_leave(self, event):
+    @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
+    def on_leave_event_handler(self, event):
         if self.current_page == 'img':
             self.hide_img_page_arrow_buttons()
-
-    def on_resize_callback(self):
-        self.set_timeout(self.resize_menubar_items, 'resize_menubar_items')
-
-        if self.current_page == 'home':
-            self.set_timeout(self.resize_home_page_items, 'resize_home_page_items')
-        elif self.current_page == 'img':
-            self.set_timeout(self.resize_img_page_items, 'resize_img_page_items')
 
     def on_home_page_click(self, event):
         self.open_choose_img_files_dialog_and_show()
@@ -1291,18 +1265,11 @@ class App:
         self.show_page('home')
         self.root.mainloop()
 
-    def set_timeout(self, func, funcid, ms=300):
-        if self.timeout_callbacks.get(funcid) is None:
-            self.timeout_callbacks[funcid] = True
+    def get_window_pos(self, geometry: Union[None, str]=None):
+        if geometry is None:
+            geometry = self.root.winfo_geometry()
 
-            def callback():
-                del self.timeout_callbacks[funcid]
-                func()
-
-            self.root.after(ms, callback)
-
-    def get_window_pos(self):
-        _, position = self.app_geometry_before_maximize.split('+', 1)
+        _, position = geometry.split('+', 1)
         x, y = map(int, position.split('+'))
         return x, y
 
