@@ -1,7 +1,9 @@
 import argparse
+import copy
 import os
 import sys
 import tkinter as tk
+from functools import reduce
 from queue import Queue
 from tkinter import ttk
 from tkinter.font import Font
@@ -328,6 +330,9 @@ class App:
         self.windowing_system = self.root.tk.call('tk', 'windowingsystem')
         self.page_wise_data = {}
         self.menu_items = {}
+        self.menu_stringvars = {}
+        self.configuration = {}
+        self.code_wise_languages = {}
 
         for page_name in APP_PAGES:
             self.page_wise_data[page_name] = {
@@ -367,9 +372,9 @@ class App:
         self.menu_status_fsm.add_state('shown', ['hidden'], self.on_menu_status_shown_state)
 
         self.img_nav_fsm.add_state('__init__', ['all_in_dir', 'selected', 'single_zooming'])
-        self.img_nav_fsm.add_state('all_in_dir', ['single_zooming'])
-        self.img_nav_fsm.add_state('selected', ['all_in_dir', 'single_zooming'])
-        self.img_nav_fsm.add_state('single_zooming', ['all_in_dir', 'selected'])
+        self.img_nav_fsm.add_state('all_in_dir', ['selected', 'single_zooming'], self.on_img_nav_all_in_dir_state)
+        self.img_nav_fsm.add_state('selected', ['all_in_dir', 'single_zooming'], self.on_img_nav_selected_state)
+        self.img_nav_fsm.add_state('single_zooming', ['all_in_dir', 'selected'], self.on_img_nav_single_zooming_state)
 
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
@@ -387,10 +392,13 @@ class App:
         self.current_image_file_idx = None
         self.current_image_file_path = None
         self.current_image_file_paths = []
+        self.selected_image_file_paths = []
 
     def init_app(self):
         self.task_queue.set_root(self.root)
         self.set_min_width_height()
+
+        self.load_configuration()
         self.apply_platform_themes_styles()
         self.root_style.theme_use('gallerypy_light')
         self.create_menubar_items()
@@ -417,6 +425,40 @@ class App:
         self.container.pack(side=tk.TOP, anchor=tk.N, fill=tk.BOTH, expand=True)
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
+
+    def load_configuration(self):
+        self.configuration['languages'] = [
+            {
+                'code': 'en',
+                'title': 'English'
+            },
+            {
+                'code': 'en-us',
+                'title': 'English (USA)'
+            },
+            {
+                'code': 'en-uk',
+                'title': 'English (UK)'
+            },
+            {
+                'code': 'bn',
+                'title': 'Bangla'
+            },
+            {
+                'code': 'bn-in',
+                'title': 'Bangla (India)'
+            },
+            {
+                'code': 'bn-bd',
+                'title': 'Bangla (Bangladesh)'
+            }
+        ]
+
+        def lang_seq2map(a, x):
+            a[x['code']] = x['title']
+            return a
+
+        reduce(lang_seq2map, self.configuration['languages'], self.code_wise_languages)
 
     def set_min_width_height(self):
         min_width = APP_MIN_WIDTH
@@ -559,7 +601,12 @@ class App:
             self.root_style.theme_create("gallerypy_light", parent='default', settings=settings)
 
     def create_menubar_items(self):
-        # The 'File' menu
+        self.create_file_menu_items()
+        self.create_edit_menu_items()
+        self.create_view_menu_items()
+        self.create_help_menu_items()
+
+    def create_file_menu_items(self):
         file_menu = tk.Menu(self.menubar, tearoff=False)
         file_menu.add_command(label='Open file(s)...', command=lambda: self.open_choose_img_files_dialog_and_show())
         file_menu.add_command(label='Open directory...', command=lambda: '')
@@ -581,7 +628,7 @@ class App:
         self.menubar.add_cascade(label='File', menu=file_menu, underline=0)
         self.menu_items['file'] = file_menu
 
-        # The 'Edit' menu
+    def create_edit_menu_items(self):
         edit_menu = tk.Menu(self.menubar, tearoff=False)
         edit_menu.add_command(label='Copy image', state=tk.DISABLED, command=lambda: '')
         edit_menu.add_command(label='Copy path', state=tk.DISABLED, command=lambda: '')
@@ -591,37 +638,70 @@ class App:
         self.menubar.add_cascade(label='Edit', menu=edit_menu, underline=0)
         self.menu_items['edit'] = edit_menu
 
-        # The 'View' menu
-        view_menu = tk.Menu(self.menubar, tearoff=False)
+    def create_view_menu_items(self):
+        # Separate StringVars for each group
+        self.menu_stringvars['appearance'] = tk.StringVar(value='system')
+        self.menu_stringvars['language'] = tk.StringVar(value='en')
+        self.menu_stringvars['image_list'] = tk.StringVar(value='selected')
 
-        # The 'Appearance' submenu
-        appearance_submenu = tk.Menu(view_menu, tearoff=False)
-        appearance_submenu.add_radiobutton(label='Light', command=lambda: '')
-        appearance_submenu.add_radiobutton(label='Dark', command=lambda: '')
-        view_menu.add_cascade(label='Appearance', menu=appearance_submenu)
+        view_menu = tk.Menu(self.menubar, tearoff=False)
 
         # The 'Window' submenu
         window_submenu = tk.Menu(view_menu, tearoff=False)
         window_submenu.add_command(label='Minimize', command=lambda: self.minimize_window())
-        window_submenu.add_command(label='Maximize', command=lambda: self.maximize_window())
-        window_submenu.add_command(label='Fullscreen', command=lambda: self.fullscreen_window())
+        window_submenu.add_radiobutton(label='Maximize', command=lambda: self.maximize_window())
+        window_submenu.add_radiobutton(label='Fullscreen', command=lambda: self.fullscreen_window())
         window_submenu.add_command(label='Restore', state=tk.DISABLED, command=lambda: self.restore_window())
         view_menu.add_cascade(label='Window', menu=window_submenu)
         self.menu_items['view__window'] = window_submenu
 
         view_menu.add_command(label='Slideshow', state=tk.DISABLED, command=lambda: '')
+        view_menu.add_separator()
+
+        # The 'Appearance' submenu
+        appearance_submenu = tk.Menu(view_menu, tearoff=False)
+        appearance_submenu.add_radiobutton(
+            value='system', label='System', variable=self.menu_stringvars['appearance'], command=lambda: ''
+        )
+        appearance_submenu.add_separator()
+        appearance_submenu.add_radiobutton(
+            value='light', label='Light', variable=self.menu_stringvars['appearance'], command=lambda: ''
+        )
+        appearance_submenu.add_separator()
+        appearance_submenu.add_radiobutton(
+            value='dark', label='Dark', variable=self.menu_stringvars['appearance'], command=lambda: ''
+        )
+        view_menu.add_cascade(label='Appearance', menu=appearance_submenu)
 
         # The 'Language' submenu
         language_submenu = tk.Menu(view_menu, tearoff=False)
-        language_submenu.add_radiobutton(label='English', command=lambda: '')
-        language_submenu.add_radiobutton(label='Bangla', command=lambda: '')
+
+        for lang in self.configuration['languages']:
+            language_submenu.add_radiobutton(
+                value=lang['code'], label=lang['title'], variable=self.menu_stringvars['language'], command=lambda: ''
+            )
+
         view_menu.add_cascade(label='Language', menu=language_submenu)
+        view_menu.add_separator()
+
+        # The 'Image List' submenu
+        image_list_submenu = tk.Menu(view_menu, tearoff=False)
+        image_list_submenu.add_radiobutton(
+            value='selected', label='Selected only', variable=self.menu_stringvars['image_list'],
+            command=lambda: self.switch_to_selected_only()
+        )
+        image_list_submenu.add_radiobutton(
+            value='entire_dir', label='Entire directory', variable=self.menu_stringvars['image_list'],
+            command=lambda: self.switch_to_entire_directory()
+        )
+        view_menu.add_cascade(label='Image List', state=tk.DISABLED, menu=image_list_submenu)
+        self.menu_items['view__image_list'] = image_list_submenu
 
         view_menu.add_command(label='Image info', state=tk.DISABLED, command=lambda: '')
         self.menubar.add_cascade(label='View', menu=view_menu, underline=0)
         self.menu_items['view'] = view_menu
 
-        # The 'Help' menu
+    def create_help_menu_items(self):
         help_menu = tk.Menu(self.menubar, tearoff=False)
         help_menu.add_command(label='Help', command=lambda: '')
         help_menu.add_command(label='About...', command=lambda: '')
@@ -778,6 +858,8 @@ class App:
         self.menu_items['edit'].entryconfig('Copy path', state=tk.DISABLED)
         self.menu_items['edit'].entryconfig('Resize image', state=tk.DISABLED)
 
+        self.menu_items['view'].entryconfig('Image List', state=tk.DISABLED)
+
         self.handle_home_page_items_on_resize()
 
     def load_page_img_items(self):
@@ -810,6 +892,9 @@ class App:
                 self.menu_items['edit'].entryconfig('Copy image', state=tk.ACTIVE)
                 self.menu_items['edit'].entryconfig('Copy path', state=tk.ACTIVE)
                 self.menu_items['edit'].entryconfig('Resize image', state=tk.ACTIVE)
+
+                if len(self.selected_image_file_paths) > 0:
+                    self.menu_items['view'].entryconfig('Image List', state=tk.ACTIVE)
 
                 current_image_dir_name = os.path.dirname(self.current_image_file_path)
 
@@ -1006,12 +1091,18 @@ class App:
             filetypes=self.dialog_filetypes
         )
 
+        self.current_image_file_idx = None
+        self.current_image_file_path = None
+        self.current_image_file_paths.clear()
+        self.selected_image_file_paths.clear()
+
         if len(selected_image_files) > 0:
+            self.current_image_file_path = os.path.abspath(selected_image_files[0])
+
             if len(selected_image_files) == 1:
-                self.current_image_file_path = os.path.abspath(selected_image_files[0])
                 self.load_other_img_files_of_current_dir()
             else:
-                self.current_image_file_paths = selected_image_files
+                self.selected_image_file_paths = tuple(map(lambda x: os.path.abspath(x), selected_image_files))
                 self.load_other_img_files()
 
             self.page_fsm.change_state('img')
@@ -1023,6 +1114,12 @@ class App:
     def show_menubar(self):
         # self.root['menu'] = self.menubar
         self.root.config(menu=self.menubar)
+
+    def switch_to_selected_only(self):
+        self.img_nav_fsm.change_state('selected')
+
+    def switch_to_entire_directory(self):
+        self.img_nav_fsm.change_state('all_in_dir')
 
     def show_current_img(self, resizeframe=True):
         page_data = self.page_wise_data.get('img')
@@ -1147,14 +1244,19 @@ class App:
             self.current_image_file_idx = None
 
     def load_other_img_files(self):
+        self.current_image_file_paths = copy.deepcopy(self.selected_image_file_paths)
+
         page_data = self.page_wise_data.get('img')
         current_image_dir_name = os.path.dirname(self.current_image_file_paths[0])
 
         if not os.path.isdir(current_image_dir_name):
             raise ValueError(f"The provided path '{current_image_dir_name}' is not a valid directory.")
 
-        self.current_image_file_path = self.current_image_file_paths[0]
-        current_image_file_idx = self.current_image_file_paths.index(self.current_image_file_path)
+        try:
+            current_image_file_idx = self.current_image_file_paths.index(self.current_image_file_path)
+        except ValueError:
+            self.current_image_file_path = os.path.abspath(self.current_image_file_paths[0])
+            current_image_file_idx = self.current_image_file_paths.index(self.current_image_file_path)
 
         if current_image_file_idx >= 0:
             self.current_image_file_idx = current_image_file_idx
@@ -1280,6 +1382,18 @@ class App:
 
         if self.page_fsm.get_state() == 'img':
             self.page_wise_data['img']['other_frames']['status'].grid()
+
+    def on_img_nav_all_in_dir_state(self, current_state: str, previous_state: str):
+        self.load_other_img_files_of_current_dir()
+        self.show_current_img(resizeframe=False)
+
+    def on_img_nav_selected_state(self, current_state: str, previous_state: str):
+        print('This is happening')
+        self.load_other_img_files()
+        self.show_current_img(resizeframe=False)
+
+    def on_img_nav_single_zooming_state(self, current_state: str, previous_state: str):
+        pass
 
     @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
     def on_minimize_event_handler(self, event):
