@@ -2,6 +2,7 @@ import argparse
 import copy
 import os
 import sys
+import re
 import tkinter as tk
 from functools import reduce
 from queue import Queue
@@ -33,7 +34,7 @@ APP_WRITABLE_IMAGE_FILE_EXTENSIONS = [
     'png', 'ppm', 'pgm', 'pbm', 'tiff', 'tif', 'webp', 'xbm', 'pdf'
 ]
 
-APP_PAGES = ['home', 'img', 'img_error', 'dirs_files']
+APP_PAGES = ['home', 'img', 'slideshow', 'img_error', 'dirs_files']
 
 EMPTY_FOLDER_IMAGE_SIZE_MIN = 60
 EMPTY_FOLDER_IMAGE_SIZE_MAX = 120
@@ -42,6 +43,7 @@ EMPTY_FOLDER_LABEL_FONT_SIZE_MIN = 8
 EMPTY_FOLDER_LABEL_FONT_SIZE_MAX = 11
 
 DEFAULT_TASK_DELAY_MS: int = 100
+SLIDESHOW_SPECTATE_DELAY_MS: int = 3000
 
 
 class TaskQueue:
@@ -249,8 +251,9 @@ class FiniteStateMachine:
         change_state(new_state):
             Changes the state if the transition is valid and executes the action for the new state.
     """
-    def __init__(self, initial_state: Union[None, str]=None):
+    def __init__(self, initial_state: Union[None, str]=None, logging: bool=False):
         self.current_state: Union[None, str] = initial_state
+        self.logging: bool = logging
         self.previous_state: Union[None, str] = None
         self.transitions: dict = {}
         self.state_actions: dict = {}
@@ -285,10 +288,13 @@ class FiniteStateMachine:
     def change_state(self, new_state: str):
         """Changes the state if the transition is valid and executes the state's action."""
         if new_state not in self.transitions.get(self.current_state, []):
-            print(f'Invalid transition: {self.current_state} → {new_state}')
+            if self.logging:
+                print(f'Invalid transition: {self.current_state} → {new_state}')
+
             return
 
-        print(f'Transition: {self.current_state} → {new_state}')
+        if self.logging:
+            print(f'Transition: {self.current_state} → {new_state}')
 
         prev_state: str = self.current_state
         self.current_state = new_state
@@ -304,11 +310,16 @@ class App:
     task_queue = TaskQueue()
     dependency_manager = DependencyManager()
 
-    window_fsm = FiniteStateMachine(initial_state='__init__')
-    page_fsm = FiniteStateMachine(initial_state='__init__')
-    cursor_fsm = FiniteStateMachine(initial_state='__init__')
-    menu_status_fsm = FiniteStateMachine(initial_state='__init__')
-    img_nav_fsm = FiniteStateMachine(initial_state='__init__')
+    window_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    window_init_size = FiniteStateMachine(initial_state='__init__', logging=False)
+    page_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    cursor_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    img_page_menu_status_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    slideshow_page_status_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    slideshow_page_spectate_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+    img_nav_fsm = FiniteStateMachine(initial_state='__init__', logging=False)
+
+    slideshow_delay: int = 5000
 
     def __init__(self, arguments: dict[str, Union[bool, None, str]]) -> None:
         if arguments is None:
@@ -357,19 +368,31 @@ class App:
         self.window_fsm.add_state('minimized', ['restored'], self.on_minimized_state)
         self.window_fsm.add_state('fullscreen', ['restored', 'maximized'], self.on_fullscreen_state)
 
+        self.window_init_size.add_state('__init__', ['ready', 'changed'])
+        self.window_init_size.add_state('ready', ['changed'])
+
         self.page_fsm.add_state('__init__', ['home', 'img', 'img_error', 'dirs_files'])
         self.page_fsm.add_state('home', ['img', 'img_error', 'dirs_files'], self.on_home_page_state)
-        self.page_fsm.add_state('img', ['home', 'img_error', 'dirs_files'], self.on_img_page_state)
+        self.page_fsm.add_state('img', ['home', 'slideshow', 'img_error', 'dirs_files'], self.on_img_page_state)
+        self.page_fsm.add_state('slideshow', ['img'], self.on_slideshow_page_state)
         self.page_fsm.add_state('img_error', ['home', 'img', 'dirs_files'], self.on_img_error_page_state)
-        self.page_fsm.add_state('dirs_files', ['home', 'img', 'img_error'], self.on_dirs_files_page_state)
+        self.page_fsm.add_state('dirs_files', ['home', 'img'], self.on_dirs_files_page_state)
 
         self.cursor_fsm.add_state('__init__', ['enter', 'leave'])
         self.cursor_fsm.add_state('enter', ['leave'], self.on_cursor_enter_state)
         self.cursor_fsm.add_state('leave', ['enter'], self.on_cursor_leave_state)
 
-        self.menu_status_fsm.add_state('__init__', ['hidden', 'shown'])
-        self.menu_status_fsm.add_state('hidden', ['shown'], self.on_menu_status_hidden_state)
-        self.menu_status_fsm.add_state('shown', ['hidden'], self.on_menu_status_shown_state)
+        self.img_page_menu_status_fsm.add_state('__init__', ['hidden', 'shown'])
+        self.img_page_menu_status_fsm.add_state('hidden', ['shown'], self.on_img_page_menu_status_hidden_state)
+        self.img_page_menu_status_fsm.add_state('shown', ['hidden'], self.on_img_page_menu_status_shown_state)
+
+        self.slideshow_page_status_fsm.add_state('__init__', ['hidden', 'shown'])
+        self.slideshow_page_status_fsm.add_state('hidden', ['shown'], self.on_slideshow_page_status_hidden_state)
+        self.slideshow_page_status_fsm.add_state('shown', ['hidden'], self.on_slideshow_page_status_shown_state)
+
+        self.slideshow_page_spectate_fsm.add_state('__init__', ['idle', 'spectate'])
+        self.slideshow_page_spectate_fsm.add_state('idle', ['spectate'], self.on_slideshow_page_idle_state)
+        self.slideshow_page_spectate_fsm.add_state('spectate', ['idle'], self.on_slideshow_page_spectate_state)
 
         self.img_nav_fsm.add_state('__init__', ['all_in_dir', 'selected', 'single_zooming'])
         self.img_nav_fsm.add_state('all_in_dir', ['selected', 'single_zooming'], self.on_img_nav_all_in_dir_state)
@@ -389,10 +412,11 @@ class App:
             ('Image Files', ' '.join([f'*.{ext}' for ext in APP_READABLE_IMAGE_FILE_EXTENSIONS])),
         )
 
-        self.current_image_file_idx = None
-        self.current_image_file_path = None
-        self.current_image_file_paths = []
-        self.selected_image_file_paths = []
+        self.current_image_file_idx: Union[None, int] = None
+        self.current_image_file_path: Union[None, str] = None
+        self.current_image_file_paths: list = []
+        self.selected_image_file_paths: list = []
+        self.slideshow_timeout_id: Union[None, str] = None
 
     def init_app(self):
         self.task_queue.set_root(self.root)
@@ -404,6 +428,7 @@ class App:
         self.create_menubar_items()
         self.create_page_home()
         self.create_page_img()
+        self.create_page_slideshow()
         self.create_page_img_error()
         self.create_page_dirs_files()
 
@@ -414,6 +439,8 @@ class App:
         self.root.bind_all('<Unmap>', self.on_minimize_event_handler)
         self.root.bind_all('<Map>', self.on_restore_event_handler)
         self.root.bind_all('<Configure>', self.on_configure_event_handler)
+
+        self.root.bind_all('<Motion>', self.on_cursor_move)
         self.root.bind_all('<Enter>', self.on_cursor_enter_event_handler)
         self.root.bind_all('<Leave>', self.on_cursor_leave_event_handler)
 
@@ -655,7 +682,9 @@ class App:
         view_menu.add_cascade(label='Window', menu=window_submenu)
         self.menu_items['view__window'] = window_submenu
 
-        view_menu.add_command(label='Slideshow', state=tk.DISABLED, command=lambda: '')
+        view_menu.add_command(
+            label='Slideshow', state=tk.DISABLED, command=lambda: self.page_fsm.change_state('slideshow')
+        )
         view_menu.add_separator()
 
         # The 'Appearance' submenu
@@ -740,7 +769,6 @@ class App:
 
         empty_folder_canvas.bind('<Button-1>', self.on_home_page_click)
         empty_folder_label.bind('<Button-1>', self.on_home_page_click)
-        # frame.bind('<Configure>', self.on_home_page_frame_resize)
 
     def create_page_img(self):
         frame = ttk.Frame(master=self.container)
@@ -801,6 +829,109 @@ class App:
         frame.bind('<Left>', lambda _: self.show_prev_img())
         frame.bind('<Right>', lambda _: self.show_next_img())
 
+    def create_page_slideshow(self):
+        frame = ttk.Frame(master=self.container)
+        frame.grid(row=0, column=0, sticky=tk.NSEW)
+
+        title_frame = ttk.Frame(master=frame)
+        title_frame.grid(row=0, column=0, sticky=tk.EW)
+
+        main_img_view_canvas = tk.Canvas(master=frame, **self.root_style_canvas_params)
+        main_img_view_canvas.grid(row=1, column=0, sticky=tk.NSEW)
+
+        status_frame = ttk.Frame(master=frame)
+        status_frame.grid(row=2, column=0, sticky=tk.EW)
+
+        frame.grid_rowconfigure(0, weight=0)
+        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_rowconfigure(2, weight=0)
+        frame.grid_columnconfigure(0, weight=1)
+
+        current_img_file_name = tk.StringVar(master=title_frame, value='[UNKNOWN]')
+        slideshow_delay = tk.StringVar(master=title_frame)
+        exit_from_slideshow = tk.StringVar(master=title_frame, value='Exit from slideshow')
+
+        current_img_file_name_label = ttk.Label(master=title_frame, textvariable=current_img_file_name)
+        slideshow_delay_dropdown = ttk.OptionMenu(
+            title_frame, slideshow_delay, '5s',
+            '1s', '2s', '3s', '4s', '5s', '7s', '10s', '15s', '30s', '60s',
+            command=self.on_slideshow_delay_change
+        )
+        exit_button = ttk.Button(
+            master=title_frame, textvariable=exit_from_slideshow, padding=(0, 0, 0, 0),
+            command=lambda: self.page_fsm.change_state('img')
+        )
+
+        current_img_file_name_label.grid(row=0, column=0, padx=4)
+        slideshow_delay_dropdown.grid(row=0, column=2, padx=4, pady=0)
+        exit_button.grid(row=0, column=3, padx=4, pady=0)
+
+        title_frame.grid_columnconfigure(0, weight=0)
+        title_frame.grid_columnconfigure(1, weight=1)
+        title_frame.grid_columnconfigure(2, weight=0)
+        title_frame.grid_columnconfigure(3, weight=0)
+
+        slideshow_delay.set('5s')
+        exit_from_slideshow.set('Exit from slideshow')
+
+        current_img_dir_path = tk.StringVar(master=status_frame, value='[NIL]')
+        current_img_idx = tk.StringVar(master=status_frame, value='0/0')
+        current_img_dim = tk.StringVar(master=status_frame, value='0x0')
+        current_img_file_size = tk.StringVar(master=status_frame, value='0 Bytes')
+        current_img_format = tk.StringVar(master=status_frame, value='[UNKNOWN]')
+
+        current_img_dir_label = ttk.Label(master=status_frame, textvariable=current_img_dir_path)
+        current_img_idx_label = ttk.Label(master=status_frame, textvariable=current_img_idx)
+        current_img_dim_label = ttk.Label(master=status_frame, textvariable=current_img_dim)
+        current_img_file_size_label = ttk.Label(master=status_frame, textvariable=current_img_file_size)
+        current_img_format_label = ttk.Label(master=status_frame, textvariable=current_img_format)
+
+        current_img_dir_label.grid(row=0, column=0, padx=4)
+        current_img_idx_label.grid(row=0, column=2, padx=4)
+        current_img_dim_label.grid(row=0, column=3, padx=4)
+        current_img_file_size_label.grid(row=0, column=4, padx=4)
+        current_img_format_label.grid(row=0, column=5, padx=4)
+
+        status_frame.grid_columnconfigure(0, weight=0)
+        status_frame.grid_columnconfigure(1, weight=1)
+        status_frame.grid_columnconfigure(2, weight=0)
+        status_frame.grid_columnconfigure(3, weight=0)
+        status_frame.grid_columnconfigure(4, weight=0)
+        status_frame.grid_columnconfigure(5, weight=0)
+
+        self.page_wise_data['slideshow']['string_vars']['current_img_file_name'] = current_img_file_name
+        self.page_wise_data['slideshow']['string_vars']['slideshow_delay'] = slideshow_delay
+        self.page_wise_data['slideshow']['string_vars']['exit_from_slideshow'] = exit_from_slideshow
+        self.page_wise_data['slideshow']['string_vars']['current_img_dir_path'] = current_img_dir_path
+        self.page_wise_data['slideshow']['string_vars']['current_img_idx'] = current_img_idx
+        self.page_wise_data['slideshow']['string_vars']['current_img_dim'] = current_img_dim
+        self.page_wise_data['slideshow']['string_vars']['current_img_file_size'] = current_img_file_size
+        self.page_wise_data['slideshow']['string_vars']['current_img_format'] = current_img_format
+
+        self.page_wise_data['slideshow']['labels']['current_img_file_name'] = current_img_file_name_label
+        self.page_wise_data['slideshow']['labels']['current_img_dir'] = current_img_dir_label
+        self.page_wise_data['slideshow']['labels']['current_img_idx'] = current_img_idx_label
+        self.page_wise_data['slideshow']['labels']['current_img_dim'] = current_img_dim_label
+        self.page_wise_data['slideshow']['labels']['current_img_file_size'] = current_img_file_size_label
+        self.page_wise_data['slideshow']['labels']['current_img_format'] = current_img_format_label
+
+        self.page_wise_data['slideshow']['canvases']['main_img_view'] = main_img_view_canvas
+        self.page_wise_data['slideshow']['other_frames']['title'] = title_frame
+        self.page_wise_data['slideshow']['other_frames']['status'] = status_frame
+        self.page_wise_data['slideshow']['page_item_loader'] = self.load_page_slideshow_items
+        self.page_wise_data['slideshow']['main_frame'] = frame
+
+        def prev_img(event=None):
+            self.slideshow_page_spectate_fsm.change_state('spectate')
+            self.show_prev_slideshow_img()
+
+        def next_img(event=None):
+            self.slideshow_page_spectate_fsm.change_state('spectate')
+            self.show_next_slideshow_img()
+
+        frame.bind('<Left>', prev_img)
+        frame.bind('<Right>', next_img)
+
     def create_page_img_error(self):
         frame = ttk.Frame(self.container)
         frame.grid(row=0, column=0, sticky=tk.NSEW)
@@ -820,6 +951,17 @@ class App:
 
         self.page_wise_data['dirs_files']['page_item_loader'] = self.load_page_dirs_files_items
         self.page_wise_data['dirs_files']['main_frame'] = frame
+
+    def disable_menu_items_as_init(self):
+        self.menu_items['file'].entryconfig('Close image', state=tk.DISABLED)
+        self.menu_items['file'].entryconfig('Delete image', state=tk.DISABLED)
+
+        self.menu_items['edit'].entryconfig('Copy image', state=tk.DISABLED)
+        self.menu_items['edit'].entryconfig('Copy path', state=tk.DISABLED)
+        self.menu_items['edit'].entryconfig('Resize image', state=tk.DISABLED)
+
+        self.menu_items['view'].entryconfig('Slideshow', state=tk.DISABLED)
+        self.menu_items['view'].entryconfig('Image List', state=tk.DISABLED)
 
     def load_page_home_items(self):
         page_data = self.page_wise_data.get('home')
@@ -850,16 +992,7 @@ class App:
         page_data['photos']['empty_folder'] = empty_folder_photo
 
         self.root.title(APP_NAME)
-
-        self.menu_items['file'].entryconfig('Close image', state=tk.DISABLED)
-        self.menu_items['file'].entryconfig('Delete image', state=tk.DISABLED)
-
-        self.menu_items['edit'].entryconfig('Copy image', state=tk.DISABLED)
-        self.menu_items['edit'].entryconfig('Copy path', state=tk.DISABLED)
-        self.menu_items['edit'].entryconfig('Resize image', state=tk.DISABLED)
-
-        self.menu_items['view'].entryconfig('Image List', state=tk.DISABLED)
-
+        self.disable_menu_items_as_init()
         self.handle_home_page_items_on_resize()
 
     def load_page_img_items(self):
@@ -867,6 +1000,10 @@ class App:
             self.page_fsm.change_state('img_error')
         else:
             try:
+                if self.page_fsm.get_previous_state() == 'slideshow':
+                    self.show_menubar()
+                    self.restore_window()
+
                 page_data = self.page_wise_data.get('img')
                 main_frame = page_data['main_frame']
 
@@ -893,6 +1030,8 @@ class App:
                 self.menu_items['edit'].entryconfig('Copy path', state=tk.ACTIVE)
                 self.menu_items['edit'].entryconfig('Resize image', state=tk.ACTIVE)
 
+                self.menu_items['view'].entryconfig('Slideshow', state=tk.ACTIVE)
+
                 if len(self.selected_image_file_paths) > 0:
                     self.menu_items['view'].entryconfig('Image List', state=tk.ACTIVE)
 
@@ -918,6 +1057,31 @@ class App:
                 print(e, file=sys.stderr)
                 self.page_fsm.change_state('img_error')
 
+    def load_page_slideshow_items(self):
+        if self.current_image_file_path is None:
+            self.restore_window()
+            self.page_fsm.change_state('img_error')
+        else:
+            try:
+                self.hide_menubar()
+                self.slideshow_page_spectate_fsm.change_state('idle')
+                self.fullscreen_window()
+
+                page_data = self.page_wise_data.get('slideshow')
+                main_frame = page_data['main_frame']
+
+                current_image_dir_name = os.path.dirname(self.current_image_file_path)
+
+                page_data['string_vars']['current_img_dir_path'].set(current_image_dir_name)
+                page_data['string_vars']['current_img_idx'].set('1/?')
+
+                self.show_current_slideshow_img()
+                self.cycle_the_slideshow(isfirst=True)
+            except Exception as e:
+                print(e, file=sys.stderr)
+                self.restore_window()
+                self.page_fsm.change_state('img_error')
+
     def load_page_img_error_items(self):
         pass
 
@@ -935,7 +1099,7 @@ class App:
             self.menu_items['view__window'].entryconfig('Restore', state=tk.ACTIVE)
 
             if self.page_fsm.get_state() == 'img':
-                self.menu_status_fsm.change_state('hidden')
+                self.img_page_menu_status_fsm.change_state('hidden')
         else:
             self.menu_items['view__window'].entryconfig('Maximize', state=tk.ACTIVE)
             self.menu_items['view__window'].entryconfig('Fullscreen', state=tk.ACTIVE)
@@ -943,7 +1107,7 @@ class App:
 
         if self.window_fsm.get_state() != 'fullscreen':
             if self.page_fsm.get_state() == 'img':
-                self.menu_status_fsm.change_state('shown')
+                self.img_page_menu_status_fsm.change_state('shown')
 
     def handle_home_page_items_on_resize(self):
         page_data = self.page_wise_data.get('home')
@@ -1034,6 +1198,55 @@ class App:
 
             page_data['photos']['current'] = resized_current_photo
 
+    def handle_slideshow_page_items_on_resize(self):
+        page_data = self.page_wise_data.get('slideshow')
+
+        current_image = page_data['images']['current']
+        current_photo = page_data['photos']['current']
+
+        if current_image is None or current_photo is None:
+            return
+
+        main_img_view_canvas = page_data['canvases']['main_img_view']
+        main_img_view_canvas_width = main_img_view_canvas.winfo_width()
+        main_img_view_canvas_height = main_img_view_canvas.winfo_height()
+
+        if main_img_view_canvas_width > 0 and main_img_view_canvas_height > 0:
+            current_image_ratio = current_image.width / current_image.height
+            main_img_view_canvas_ratio = main_img_view_canvas_width / main_img_view_canvas_height
+
+            if current_image_ratio > main_img_view_canvas_ratio:
+                new_width = main_img_view_canvas_width
+                new_height = new_width / current_image_ratio
+            else:
+                new_height = main_img_view_canvas_height
+                new_width = new_height * current_image_ratio
+
+            new_width = int(new_width)
+            new_height = int(new_height)
+
+            if new_width <= 0 or new_height <= 0:
+                return
+
+            new_width = min(new_width, self.current_image_width)
+            new_height = min(new_height, self.current_image_height)
+
+            resized_current_image = current_image.copy()
+            resized_current_image.thumbnail((new_width, new_height), Image.Resampling.LANCZOS)
+            resized_current_photo = ImageTk.PhotoImage(resized_current_image)
+
+            main_img_view_canvas.delete('all')
+
+            main_img_view_canvas.create_image(
+                main_img_view_canvas_width // 2,
+                main_img_view_canvas_height // 2,
+                anchor=tk.CENTER,
+                image=resized_current_photo
+            )
+            main_img_view_canvas.image = resized_current_photo
+
+            page_data['photos']['current'] = resized_current_photo
+
     def handle_all_items_on_resize(self):
         self.handle_menubar_items_on_resize()
 
@@ -1041,6 +1254,8 @@ class App:
             self.handle_home_page_items_on_resize()
         elif self.page_fsm.get_state() == 'img':
             self.handle_img_page_items_on_resize()
+        elif self.page_fsm.get_state() == 'slideshow':
+            self.handle_slideshow_page_items_on_resize()
 
     def show_img_page_arrow_buttons(self, left=True, right=True):
         page_data = self.page_wise_data.get('img')
@@ -1121,7 +1336,7 @@ class App:
     def switch_to_entire_directory(self):
         self.img_nav_fsm.change_state('all_in_dir')
 
-    def show_current_img(self, resizeframe=True):
+    def show_current_img(self):
         page_data = self.page_wise_data.get('img')
 
         main_img_view_canvas = page_data['canvases']['main_img_view']
@@ -1143,7 +1358,7 @@ class App:
         self.current_image_width = current_image.width
         self.current_image_height = current_image.height
 
-        if resizeframe:  # and self._is_initial_dims:
+        if self.window_init_size.get_state() == '__init__' or self.window_init_size.get_state() == 'ready':
             screen_width = self.screen_width * 0.9
             screen_height = self.screen_height * 0.8
 
@@ -1169,6 +1384,8 @@ class App:
                     str(new_height if new_height >= APP_HEIGHT else APP_HEIGHT)
                 )
 
+        self.window_init_size.change_state('changed')
+
         current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
         current_imd_file_size = self.get_readable_file_size(self.current_image_file_path)
 
@@ -1190,7 +1407,7 @@ class App:
 
     def show_idx_img(self):
         self.current_image_file_path = self.current_image_file_paths[self.current_image_file_idx]
-        self.show_current_img(resizeframe=False)
+        self.show_current_img()
 
     def show_prev_img(self):
         if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
@@ -1283,6 +1500,115 @@ class App:
 
         self.page_fsm.change_state('home')
 
+    def show_current_slideshow_img(self):
+        page_data = self.page_wise_data.get('slideshow')
+
+        main_img_view_canvas = page_data['canvases']['main_img_view']
+        current_image = Image.open(self.current_image_file_path)
+        current_photo = ImageTk.PhotoImage(current_image)
+
+        current_image_file_base_name = os.path.basename(self.current_image_file_path)
+        current_image_file_name = os.path.splitext(current_image_file_base_name)[0]
+        self.root.title(APP_NAME + ' - ' + current_image_file_name)
+
+        main_img_view_canvas.create_image(
+            main_img_view_canvas.winfo_width() // 2,
+            main_img_view_canvas.winfo_height() // 2,
+            anchor=tk.CENTER,
+            image=current_photo
+        )
+        main_img_view_canvas.image = current_photo
+
+        self.current_image_width = current_image.width
+        self.current_image_height = current_image.height
+
+        current_img_dim = str(current_image.size[0]) + 'x' + str(current_image.size[1])
+        current_imd_file_size = self.get_readable_file_size(self.current_image_file_path)
+
+        page_data['string_vars']['current_img_file_name'].set(current_image_file_name)
+        page_data['string_vars']['current_img_dim'].set(current_img_dim)
+        page_data['string_vars']['current_img_file_size'].set(current_imd_file_size)
+        page_data['string_vars']['current_img_format'].set(current_image.format)
+
+        page_data['string_vars']['current_img_idx'].set(
+            (str(self.current_image_file_idx + 1) if self.current_image_file_idx is not None else '1') +
+            '/' +
+            (str(len(self.current_image_file_paths)) if len(self.current_image_file_paths) > 0 else '?')
+        )
+
+        page_data['images']['current'] = current_image
+        page_data['photos']['current'] = current_photo
+
+        page_data['main_frame'].focus_set()
+        self.handle_slideshow_page_items_on_resize()
+
+    def show_idx_slideshow_img(self):
+        self.current_image_file_path = self.current_image_file_paths[self.current_image_file_idx]
+        self.show_current_slideshow_img()
+
+    def show_prev_slideshow_img(self):
+        if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
+            self.current_image_file_idx -= 1
+
+            if self.current_image_file_idx < 0:
+                self.current_image_file_idx = len(self.current_image_file_paths) - 1
+
+            self.show_idx_slideshow_img()
+
+    def show_next_slideshow_img(self):
+        if self.current_image_file_paths is not None and len(self.current_image_file_paths) > 0:
+            self.current_image_file_idx += 1
+
+            if self.current_image_file_idx == len(self.current_image_file_paths):
+                self.current_image_file_idx = 0
+
+            self.show_idx_slideshow_img()
+
+    def cycle_the_slideshow(self, isfirst: bool=False, hold: bool=False):
+        if self.page_fsm.get_state() != 'slideshow':
+            if self.slideshow_timeout_id is not None:
+                self.root.after_cancel(self.slideshow_timeout_id)
+                self.slideshow_timeout_id = None
+
+            return
+
+        if isfirst or self.slideshow_page_spectate_fsm.get_state() == 'spectate':
+            if self.slideshow_timeout_id is not None:
+                self.root.after_cancel(self.slideshow_timeout_id)
+                self.slideshow_timeout_id = None
+
+            self.slideshow_timeout_id = self.root.after(
+                SLIDESHOW_SPECTATE_DELAY_MS, lambda: self.cycle_the_slideshow(hold=True)
+            )
+            return
+
+        if not hold:
+            self.show_next_slideshow_img()
+
+        self.slideshow_timeout_id = self.root.after(self.slideshow_delay, self.cycle_the_slideshow)
+
+    @task_queue.task(debounce=True)
+    def enter_spectate_mode(self):
+        if self.page_fsm.get_state() == 'slideshow':
+            self.show_cursor()
+            self.slideshow_page_status_fsm.change_state('shown')
+            self.task_queue.enqueue_task(
+                'slideshow_page_change_state_to_idle', lambda: self.slideshow_page_spectate_fsm.change_state('idle'),
+                delay=SLIDESHOW_SPECTATE_DELAY_MS
+            )
+
+    @task_queue.task(debounce=True, delay=SLIDESHOW_SPECTATE_DELAY_MS)
+    def leave_spectate_mode(self):
+        if self.page_fsm.get_state() == 'slideshow':
+            self.hide_cursor()
+            self.slideshow_page_status_fsm.change_state('hidden')
+
+    def show_cursor(self):
+        self.root.config(cursor='arrow')
+
+    def hide_cursor(self):
+        self.root.config(cursor='none')
+
     def minimize_window(self):
         self.root.attributes('-fullscreen', False)
         self.is_window_fullscreen = False
@@ -1317,15 +1643,20 @@ class App:
         if self.window_fsm.get_state() == 'fullscreen':
             self.restore_window()
 
+        if self.page_fsm.get_state() == 'slideshow':
+            self.page_fsm.change_state('img')
+
     def on_alt_keypress(self, event):
         if self.window_fsm.get_state() == 'fullscreen':
             if self.page_fsm.get_state() == 'img':
-                if self.menu_status_fsm.get_state() == 'shown':
-                    self.menu_status_fsm.change_state('hidden')
+                if self.img_page_menu_status_fsm.get_state() == 'shown':
+                    self.img_page_menu_status_fsm.change_state('hidden')
                 else:
-                    self.menu_status_fsm.change_state('shown')
+                    self.img_page_menu_status_fsm.change_state('shown')
 
     def on_page_state(self, page_name: str, current_state: str, previous_state: str):
+        self.show_cursor()
+
         page_data = self.page_wise_data.get(page_name)
 
         if page_data:
@@ -1342,6 +1673,9 @@ class App:
 
     def on_img_page_state(self, current_state: str, previous_state: str):
         self.on_page_state('img', current_state, previous_state)
+
+    def on_slideshow_page_state(self, current_state: str, previous_state: str):
+        self.on_page_state('slideshow', current_state, previous_state)
 
     def on_img_error_page_state(self, current_state: str, previous_state: str):
         self.on_page_state('img_error', current_state, previous_state)
@@ -1371,26 +1705,40 @@ class App:
         if self.page_fsm.get_state() == 'img':
             self.hide_img_page_arrow_buttons()
 
-    def on_menu_status_hidden_state(self, current_state: str, previous_state: str):
+    def on_img_page_menu_status_hidden_state(self, current_state: str, previous_state: str):
         self.hide_menubar()
 
         if self.page_fsm.get_state() == 'img':
             self.page_wise_data['img']['other_frames']['status'].grid_remove()
 
-    def on_menu_status_shown_state(self, current_state: str, previous_state: str):
+    def on_img_page_menu_status_shown_state(self, current_state: str, previous_state: str):
         self.show_menubar()
 
         if self.page_fsm.get_state() == 'img':
             self.page_wise_data['img']['other_frames']['status'].grid()
 
+    def on_slideshow_page_status_hidden_state(self, current_state: str, previous_state: str):
+        self.page_wise_data['slideshow']['other_frames']['title'].grid_remove()
+        self.page_wise_data['slideshow']['other_frames']['status'].grid_remove()
+        self.root.after(DEFAULT_TASK_DELAY_MS + 100, self.handle_all_items_on_resize)
+
+    def on_slideshow_page_status_shown_state(self, current_state: str, previous_state: str):
+        self.page_wise_data['slideshow']['other_frames']['title'].grid()
+        self.page_wise_data['slideshow']['other_frames']['status'].grid()
+
+    def on_slideshow_page_spectate_state(self, current_state: str, previous_state: str):
+        self.enter_spectate_mode()
+
+    def on_slideshow_page_idle_state(self, current_state: str, previous_state: str):
+        self.leave_spectate_mode()
+
     def on_img_nav_all_in_dir_state(self, current_state: str, previous_state: str):
         self.load_other_img_files_of_current_dir()
-        self.show_current_img(resizeframe=False)
+        self.show_current_img()
 
     def on_img_nav_selected_state(self, current_state: str, previous_state: str):
-        print('This is happening')
         self.load_other_img_files()
-        self.show_current_img(resizeframe=False)
+        self.show_current_img()
 
     def on_img_nav_single_zooming_state(self, current_state: str, previous_state: str):
         pass
@@ -1406,6 +1754,14 @@ class App:
             if self.window_fsm.get_state() == 'maximized' and self.window_fsm.get_previous_state() == 'fullscreen':
                 pos_x, pos_y = self.get_window_pos(self.app_geometry_before_maximized)
                 self.root.geometry(f'{str(self.app_width)}x{str(self.app_height)}+{str(pos_x)}+{str(pos_y)}')
+
+            if self.app_width != APP_WIDTH or self.app_height != APP_HEIGHT:
+                if (self.window_fsm.get_previous_state() is not None and
+                        self.window_fsm.get_previous_state() == 'restored'):
+                    if self.window_init_size.get_state() == 'ready':
+                        self.window_init_size.change_state('changed')
+                    else:
+                        self.window_init_size.change_state('ready')
 
             self.window_fsm.change_state('restored')
 
@@ -1436,6 +1792,10 @@ class App:
     def on_fullscreen_event_handler(self, event):
         self.window_fsm.change_state('fullscreen')
 
+    def on_cursor_move(self, event):
+        if self.page_fsm.get_state() == 'slideshow':
+            self.slideshow_page_spectate_fsm.change_state('spectate')
+
     @task_queue.task(debounce=True, delay=DEFAULT_TASK_DELAY_MS)
     def on_cursor_enter_event_handler(self, event):
         self.cursor_fsm.change_state('enter')
@@ -1446,6 +1806,15 @@ class App:
 
     def on_home_page_click(self, event):
         self.open_choose_img_files_dialog_and_show()
+
+    def on_slideshow_delay_change(self, selected: str):
+        self.slideshow_delay = int(re.match(r'\d+', selected).group()) * 1000
+
+        if self.slideshow_timeout_id is not None:
+            self.root.after_cancel(self.slideshow_timeout_id)
+            self.slideshow_timeout_id = None
+
+        self.cycle_the_slideshow(hold=True)
 
     def run(self):
         self.init_app()
