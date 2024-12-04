@@ -3,6 +3,9 @@ import copy
 import os
 import sys
 import re
+import platform
+import subprocess
+import ctypes
 import tkinter as tk
 from functools import reduce
 from queue import Queue
@@ -10,7 +13,11 @@ from tkinter import ttk
 from tkinter.font import Font
 from tkinter import filedialog
 from typing import Callable, Any, Union
+
 from PIL import Image, ImageTk
+import pyperclip
+from send2trash import send2trash
+
 
 APP_WIDTH = 640
 APP_HEIGHT = 400
@@ -635,10 +642,10 @@ class App:
 
     def create_file_menu_items(self):
         file_menu = tk.Menu(self.menubar, tearoff=False)
-        file_menu.add_command(label='Open file(s)...', command=lambda: self.open_choose_img_files_dialog_and_show())
+        file_menu.add_command(label='Open file(s)...', command=self.open_choose_img_files_dialog_and_show)
         file_menu.add_command(label='Open directory...', command=lambda: '')
-        file_menu.add_command(label='Close image', state=tk.DISABLED, command=lambda: self.close_current_img())
-        file_menu.add_command(label='Delete image', state=tk.DISABLED, command=lambda: '')
+        file_menu.add_command(label='Close image', state=tk.DISABLED, command=self.close_current_img)
+        file_menu.add_command(label='Delete image', state=tk.DISABLED, command=self.delete_current_img)
         file_menu.add_separator()
 
         # The 'Export' submenu
@@ -657,10 +664,18 @@ class App:
 
     def create_edit_menu_items(self):
         edit_menu = tk.Menu(self.menubar, tearoff=False)
-        edit_menu.add_command(label='Copy image', state=tk.DISABLED, command=lambda: '')
-        edit_menu.add_command(label='Copy path', state=tk.DISABLED, command=lambda: '')
+
+        edit_menu.add_command(label='Copy image', state=tk.DISABLED, command=self.copy_current_image_file)
+
+        # The 'Copy path' submenu
+        copy_path_submenu = tk.Menu(edit_menu, tearoff=False)
+        copy_path_submenu.add_command(label='Full path', command=self.copy_current_image_full_path)
+        copy_path_submenu.add_command(label='File name', command=self.copy_current_image_file_name)
+        edit_menu.add_cascade(label='Copy path', state=tk.DISABLED, menu=copy_path_submenu)
+
         edit_menu.add_command(label='Resize image', state=tk.DISABLED, command=lambda: '')
         edit_menu.add_separator()
+
         edit_menu.add_command(label='Settings', command=lambda: '')
         self.menubar.add_cascade(label='Edit', menu=edit_menu, underline=0)
         self.menu_items['edit'] = edit_menu
@@ -1004,6 +1019,8 @@ class App:
                     self.show_menubar()
                     self.restore_window()
 
+                self.menu_items['edit'].entryconfig('Copy path', state=tk.ACTIVE)
+
                 page_data = self.page_wise_data.get('img')
                 main_frame = page_data['main_frame']
 
@@ -1317,7 +1334,7 @@ class App:
             if len(selected_image_files) == 1:
                 self.load_other_img_files_of_current_dir()
             else:
-                self.selected_image_file_paths = tuple(map(lambda x: os.path.abspath(x), selected_image_files))
+                self.selected_image_file_paths = list(map(lambda x: os.path.abspath(x), selected_image_files))
                 self.load_other_img_files()
 
             self.page_fsm.change_state('img')
@@ -1500,6 +1517,38 @@ class App:
 
         self.page_fsm.change_state('home')
 
+    def delete_current_img(self):
+        try:
+            send2trash(self.current_image_file_path)
+
+            if self.page_fsm.get_state() == 'img':
+                if len(self.current_image_file_paths) == 1:
+                    self.close_current_img()
+                else:
+                    print(self.img_nav_fsm.get_state())
+                    if self.img_nav_fsm.get_state() == '__init__' or self.img_nav_fsm.get_state() == 'all_in_dir' or (
+                            self.img_nav_fsm.get_state() == 'single_zooming' and
+                            self.img_nav_fsm.get_previous_state() == 'all_in_dir'):
+                        if self.current_image_file_idx >= (len(self.current_image_file_paths) - 1):
+                            self.current_image_file_idx = 0
+                        else:
+                            self.current_image_file_idx += 1
+
+                        self.current_image_file_path = self.current_image_file_paths[self.current_image_file_idx]
+                        self.load_other_img_files_of_current_dir()
+                    else:
+                        print('deleting')
+                        del self.selected_image_file_paths[self.current_image_file_idx]
+                        self.load_other_img_files()
+
+                    self.show_idx_img()
+        except FileNotFoundError:
+            print(f'File not found: {self.current_image_file_path}', file=sys.stderr)
+        except PermissionError:
+            print(f'Permission denied: {self.current_image_file_path}', file=sys.stderr)
+        except Exception as e:
+            print(f'Error moving file to recycle bin: {e}', file=sys.stderr)
+
     def show_current_slideshow_img(self):
         page_data = self.page_wise_data.get('slideshow')
 
@@ -1586,6 +1635,38 @@ class App:
             self.show_next_slideshow_img()
 
         self.slideshow_timeout_id = self.root.after(self.slideshow_delay, self.cycle_the_slideshow)
+
+    def copy_current_image_file(self):
+        """Copy a file path to the clipboard for Windows, Linux, or macOS."""
+        os_name = platform.system()
+
+        try:
+            if os_name == 'Windows':
+                full_path = (self.current_image_file_path + '\0').encode('utf-16le')
+                h_global_mem = ctypes.windll.kernel32.GlobalAlloc(0x2000, len(full_path))
+                lp_global_mem = ctypes.windll.kernel32.GlobalLock(h_global_mem)
+                ctypes.memmove(lp_global_mem, full_path, len(full_path))
+                ctypes.windll.kernel32.GlobalUnlock(h_global_mem)
+
+                ctypes.windll.user32.OpenClipboard(0)
+                ctypes.windll.user32.EmptyClipboard()
+                ctypes.windll.user32.SetClipboardData(15, h_global_mem)
+                ctypes.windll.user32.CloseClipboard()
+
+            elif os_name == 'Linux':
+                subprocess.run(['xclip', '-selection', 'clipboard'], input=self.current_image_file_path.encode())
+
+            elif os_name == 'Darwin':  # macOS
+                subprocess.run(['pbcopy'], input=self.current_image_file_path.encode())
+        except Exception as ex:
+            print(ex, file=sys.stderr)
+
+    def copy_current_image_full_path(self):
+        pyperclip.copy(self.current_image_file_path)
+
+    def copy_current_image_file_name(self):
+        file_name = os.path.basename(self.current_image_file_path)
+        pyperclip.copy(file_name)
 
     @task_queue.task(debounce=True)
     def enter_spectate_mode(self):
